@@ -201,4 +201,8 @@ MIGRATIONS: list[str] = [
 
     CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """,
+    # 2 — machine-readable review kind for grouping
+    """
+    ALTER TABLE flow_states ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+    """,
 ]

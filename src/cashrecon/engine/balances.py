@@ -60,8 +60,9 @@ def account_view(store: Store, settings: Settings, account: Account, day: date) 
         "code": account.code, "name": account.name, "type": account.type_cn, "domain": account.domain,
         "collection": "自动采集" if account.is_auto else "人工登记", "personal_funds": account.personal_funds,
         "source": source, "opening": None, "inflow": None, "outflow": None, "closing": None,
-        "calc_closing": None, "checks": [], "status": "MISSING", "note": "",
-        "low_balance": settings.low_balance_cents(account),
+        "calc_closing": None, "checks": [], "status": "MISSING", "status_cn": STATUS_CN["MISSING"], "note": "",
+        "low_balance": settings.low_balance_cents(account), "below_low": False, "carried": False,
+        "diff_reason": "", "last_manual_check": None,
     }
     if primary is None:
         view["note"] = "该账户当日没有数据"

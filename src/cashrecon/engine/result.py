@@ -19,6 +19,7 @@ from cashrecon.sources import SOURCE_CN
 STATE_CN = {"NORMAL": "正常", "DUPLICATE": "重复（已剔除）", "TRANSFER": "内部划转", "PENDING": "在途",
             "REVIEW": "待核", "IGNORED": "已忽略"}
 REVIEW_LOOKBACK_DAYS = 14
+LARGE_ITEM_CENTS = 2_000_000  # single offline P&L items >= 20,000 yuan are highlighted
 
 
 def source_health(store: Store, settings: Settings, day: date) -> tuple[str, list[dict[str, Any]]]:
@@ -60,7 +61,7 @@ def source_health(store: Store, settings: Settings, day: date) -> tuple[str, lis
 def _flow_rows(store: Store, where: str, params: tuple) -> list[dict[str, Any]]:
     rows = store.query(
         "SELECT f.flow_id, f.source, f.account_code, f.biz_date, f.biz_time, f.direction, f.amount_cents, "
-        "f.src_category, f.summary, f.counterparty, f.initiator, s.state, s.category, s.reason, s.link_id, "
+        "f.src_category, f.summary, f.counterparty, f.initiator, s.state, s.category, s.reason, s.link_id, s.kind, "
         "a.name AS account_name FROM flows f JOIN flow_states s USING (flow_id) "
         "LEFT JOIN accounts a ON a.account_code = f.account_code WHERE " + where +
         " ORDER BY f.biz_time", params)
@@ -86,9 +87,16 @@ def recon_summary(store: Store, day: date) -> dict[str, Any]:
     review = _flow_rows(store, "s.state = 'REVIEW' AND f.biz_date BETWEEN ? AND ?", (start, text))
     pending = _flow_rows(store, "s.state = 'PENDING' AND f.biz_date BETWEEN ? AND ?", (start, text))
     duplicates = store.scalar("SELECT COUNT(*) FROM links WHERE kind='DUPLICATE' AND biz_date = ?", (text,))
+    large = [{"account": r["account_name"], "text": r["src_category"] or r["summary"], "amount": r["amount_cents"],
+              "direction": r["direction"]}
+             for r in _flow_rows(store, "f.biz_date = ? AND s.state = 'NORMAL' AND f.amount_cents >= ? "
+                                 "AND f.account_code IN (SELECT account_code FROM accounts WHERE domain = 'OFFLINE') "
+                                 "AND s.category NOT IN ('XFER_INTERNAL','XFER_ZT_TOPUP','XFER_ZT_WITHDRAW',"
+                                 "'PASS_THROUGH','OWNER_DRAW','FINANCING')",
+                                 (text, LARGE_ITEM_CENTS))]
     return {"counts": counts, "amounts": amounts,
             "counts_cn": {STATE_CN.get(k, k): v for k, v in counts.items()},
-            "duplicates": duplicates, "review": review, "pending": pending,
+            "duplicates": duplicates, "review": review, "pending": pending, "large_items": sorted(large, key=lambda x: -x["amount"]),
             "review_today": sum(1 for r in review if r["biz_date"] == text)}
 
 

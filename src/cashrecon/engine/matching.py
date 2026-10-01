@@ -47,6 +47,7 @@ class EFlow:
     category: str = "UNCLASSIFIED"
     state: str = "NORMAL"
     reason: str = ""
+    kind: str = ""  # review/pending kind, used to group action items
     link_id: str | None = None   # transfer / top-up / withdrawal pairing
     dup_link: str | None = None  # this auto record is the primary of a journal duplicate
     locked: bool = False  # decided manually
@@ -115,7 +116,7 @@ class Matcher:
             f.category, _ = self.classifier.classify(f.source, f.direction, {
                 "src_category": f.src_category, "counterparty": f.counterparty, "summary": f.summary})
             if f.account.startswith("UNMAPPED:"):
-                f.state, f.reason = "REVIEW", "日记账账户未在配置中登记"
+                f.state, f.reason, f.kind = "REVIEW", "日记账账户未在配置中登记", "unmapped_account"
             mapping = self.settings.withdraw_initiators.get(f.initiator) if f.initiator else None
             if mapping and mapping.get("category") and f.category == "XFER_ZT_WITHDRAW":
                 f.category = mapping["category"]
@@ -141,7 +142,7 @@ class Matcher:
             elif decision in ("duplicate", "transfer"):
                 target = flows.get(d["target_flow_id"] or "")
                 if target is None:
-                    f.state, f.reason = "REVIEW", "人工结论引用的流水不存在"
+                    f.state, f.reason, f.kind = "REVIEW", "人工结论引用的流水不存在", "manual_broken"
                     continue
                 kind = "DUPLICATE" if decision == "duplicate" else "TRANSFER"
                 link = _link_id(kind, f.flow_id, target.flow_id)
@@ -273,23 +274,26 @@ class Matcher:
                 continue
             if f.source == "JOURNAL" and f.account in self.auto_accounts:
                 f.state = "REVIEW"
+                f.kind = "adjust" if f.category == "ADJUST" else "journal_unmatched"
                 f.reason = ("日记账余额修改，需确认原因" if f.category == "ADJUST" else
                             "自动采集账户上的日记账登记，没有找到对应的银行/支付宝流水（可能登记错误或采集遗漏）")
             elif f.category == "ADJUST":
-                f.state, f.reason = "REVIEW", "余额修改/测试记录，需确认"
+                f.state, f.reason, f.kind = "REVIEW", "余额修改/测试记录，需确认", "adjust"
             elif f.category == "UNCLASSIFIED" and f.source == "JOURNAL" and (
                     (f.direction == "OUT" and _leaf(f.src_category).startswith("收")) or
                     (f.direction == "IN" and _leaf(f.src_category).startswith("付"))):
-                f.state = "REVIEW"
+                f.state, f.kind = "REVIEW", "contradiction"
                 f.reason = f"登记科目“{_leaf(f.src_category)}”与收付方向（{'付款' if f.direction == 'OUT' else '收款'}）矛盾，请核实"
             elif f.category == "XFER_ZT_WITHDRAW" and f.account == self.zt_account:
                 age = (self.today - f.day).days
                 who = f"（发起人 {f.initiator}）" if f.initiator else ""
+                f.kind = "withdraw_unknown"
                 if age <= overdue:
                     f.state, f.reason = "PENDING", f"中天提现{who}，等待到账"
                 else:
                     f.state, f.reason = "REVIEW", f"中天提现{who}超过 {overdue} 天未在本网点账户找到入账，去向待确认"
             elif f.category == "XFER_ZT_TOPUP":
+                f.kind = "topup_unmatched"
                 if (self.today - f.day).days <= 1:
                     f.state, f.reason = "PENDING", "中天充值，等待另一端记录"
                 elif f.account != self.zt_account:
@@ -297,7 +301,7 @@ class Matcher:
                     f.reason = ("付款给中通总部，但中天账户当日及次日没有对应充值，"
                                 "请确认用途（面单/物料/保证金/其他）")
             elif f.category == "XFER_INTERNAL":
-                f.state = "REVIEW"
+                f.state, f.kind = "REVIEW", "transfer_out_unknown" if f.direction == "OUT" else "transfer_in_unknown"
                 f.reason = ("转出到本网点其他账户，但未找到对应转入（对方账户可能未纳入系统）" if f.direction == "OUT"
                             else "转入但未找到来源账户的转出记录")
 
@@ -311,6 +315,6 @@ def persist(store: Store, result: MatchResult) -> None:
                           "fee_cents, rule, actor) VALUES (:link_id,:kind,:flow_a,:flow_b,:biz_date,:amount_cents,"
                           ":fee_cents,:rule,:actor)", link)
         store.conn.executemany(
-            "INSERT INTO flow_states (flow_id, biz_date, state, category, reason, link_id) VALUES (?,?,?,?,?,?)",
-            [(f.flow_id, f.day.isoformat(), f.state, f.category, f.reason, f.link_id or f.dup_link)
+            "INSERT INTO flow_states (flow_id, biz_date, state, category, reason, link_id, kind) VALUES (?,?,?,?,?,?,?)",
+            [(f.flow_id, f.day.isoformat(), f.state, f.category, f.reason, f.link_id or f.dup_link, f.kind)
              for f in result.flows.values()])
