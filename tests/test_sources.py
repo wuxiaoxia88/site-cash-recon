@@ -86,6 +86,9 @@ def test_journal_source_paginates_and_reads_summary(settings):
     assert [c[2]["currentPage"] for c in client.calls if c[1] == "page"] == [1, 2]
     bal = batch.balances[0]
     assert (bal.account_code, bal.opening_cents, bal.closing_cents, bal.outflow_cents) == ("STAFF_WECHAT", 50000, 43500, 6500)
+    # idle manual accounts are carried from the 31-day window (same fake summary => only P-SW present)
+    windows = [c[2]["startDate"] for c in client.calls if c[1] == "account-summary"]
+    assert windows == ["2026-09-30 00:00:00", "2026-08-31 00:00:00"]
 
 
 def test_journal_incomplete_pagination(settings):

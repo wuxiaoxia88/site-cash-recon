@@ -4,7 +4,7 @@
 # op:     contains | equals | prefix | regex
 # direction: IN | OUT | *（对中天科目分项，IN=金额为正）
 # priority: 数字越小越优先
-version = 3
+version = 4
 
 # ------------------------------------------------------------ 中天科目分项
 [[rules]]
@@ -64,6 +64,38 @@ op = "contains"
 pattern = "平台服务"
 category = "COST_ADMIN"
 priority = 10
+
+[[rules]]
+source = "ZT_SUMMARY"
+field = "path"
+op = "regex"
+pattern = "质押款"
+category = "PASS_THROUGH"
+priority = 10
+
+[[rules]]
+source = "ZT_SUMMARY"
+field = "path"
+op = "regex"
+pattern = "/(调节派费|考核派费|派件派费补贴)$"
+category = "COST_POLICY"
+priority = 20
+
+[[rules]]
+source = "ZT_SUMMARY"
+field = "path"
+op = "contains"
+pattern = "物料系统结算款"
+category = "COST_WAYBILL"
+priority = 20
+
+[[rules]]
+source = "ZT_SUMMARY"
+field = "path"
+op = "contains"
+pattern = "车辆保险"
+category = "COST_VEHICLE"
+priority = 20
 
 [[rules]]
 source = "ZT_SUMMARY"
@@ -300,6 +332,16 @@ priority = 40
 source = "*"
 field = "src_category"
 op = "regex"
+pattern = "退单款|退客户运费"
+direction = "OUT"
+category = "INC_PICKUP"
+priority = 40
+note = "退款冲减揽收收入"
+
+[[rules]]
+source = "*"
+field = "src_category"
+op = "regex"
 pattern = "利息收入|其他收入|退款"
 direction = "IN"
 category = "INC_OTHER"
@@ -335,8 +377,7 @@ priority = 35
 source = "*"
 field = "src_category"
 op = "regex"
-pattern = "驿站|快递柜|房租|水电"
-direction = "OUT"
+pattern = "驿站|快递柜|房租|水电|租金|场地"
 category = "COST_STATION"
 priority = 40
 

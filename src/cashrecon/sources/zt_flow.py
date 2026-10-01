@@ -30,6 +30,8 @@ from cashrecon.sources.base import (
 from cashrecon.zto import ZtoClient
 
 DEFAULT_MOVEMENT_TYPES = ("线下提现", "中天余额提现", "中通支付充值", "转账")
+WITHDRAW_TYPES = ("线下提现", "中天余额提现")
+MIN_MOVEMENT_CENTS = 10000  # wallet micro top-ups/withdrawals are summarised, not stored
 INITIATOR = re.compile(r"(\d+(?:\.\d+)+)\s*掌中通发起")
 OPERA = {0: "", 1: "红冲", 2: "重发"}
 
@@ -52,7 +54,10 @@ class _Collector:
             self.inflow += signed
         else:
             self.outflow += -signed
-        if signed == 0 or (kind not in self.keep_types and abs(signed) < self.large_cents):
+        if signed == 0:
+            return
+        movement = kind in self.keep_types and (kind in WITHDRAW_TYPES or abs(signed) >= MIN_MOVEMENT_CENTS)
+        if not movement and abs(signed) < self.large_cents:
             return
         self.batch.flows.append(FlowRecord(
             source="ZT_FLOW", source_ref=ref, account_code=self.account, biz_time=when,

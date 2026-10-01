@@ -245,6 +245,10 @@ class BankLedgerSource:
                 batch.balances.append(BalanceRecord(account, text, source, opening, closing, inflow, outflow, note))
                 batch.flows.extend(r.flow for r in rows)
             batch.flow_sources = tuple(dict.fromkeys(p[0] for p in plans))
+            latest = conn.execute("SELECT MAX(day) FROM recon_daily").fetchone()[0]
+            if latest is not None and str(latest) < text:
+                batch.complete = False
+                batch.notes.append(f"上游银行采集最新日对账为 {latest}，当日数据可能尚未采集完整")
             batch.balances.extend(self._recon_daily(conn, text))
             conn.rollback()
         except sqlite3.Error as exc:

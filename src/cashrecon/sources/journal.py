@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from cashrecon import dates
@@ -12,6 +12,7 @@ from cashrecon.sources.base import BalanceRecord, FlowRecord, SourceBatch, Sourc
 from cashrecon.zto import ZtoClient
 
 PAGE_SIZE = 100
+SUMMARY_MAX_DAYS = 31
 MAX_PAGES = 200
 UNCATEGORIZED = {"", "-", "未归类", "None"}
 RAW_KEYS = ("id", "serialNumber", "accountName", "oneCategoryName", "secondCategoryName",
@@ -135,7 +136,26 @@ class JournalSource:
         summary, _ = self.client.data("site-journal-summary", "account-summary", {
             "startDate": start, "endDate": end, "currentPage": 1, "pageSize": 100})
         batch.balances.extend(parse_account_summary(summary, self.settings, day))
+        self._carry_idle_accounts(batch, day)
         return batch
+
+    def _carry_idle_accounts(self, batch: SourceBatch, day: date) -> None:
+        """Accounts without entries on ``day`` are absent from the daily summary; derive their
+        closing balance from a 31-day window (the portal's maximum) ending on ``day``."""
+        present = {b.account_code for b in batch.balances}
+        idle = [a for a in self.settings.accounts if a.portal_code and not a.is_auto and a.code not in present]
+        if not idle:
+            return
+        window_start = (day - timedelta(days=SUMMARY_MAX_DAYS - 1)).isoformat() + " 00:00:00"
+        _, end = dates.window(day)
+        data, _ = self.client.data("site-journal-summary", "account-summary", {
+            "startDate": window_start, "endDate": end, "currentPage": 1, "pageSize": 100})
+        wanted = {a.code for a in idle}
+        for record in parse_account_summary(data, self.settings, day):
+            if record.account_code in wanted and record.closing_cents is not None:
+                batch.balances.append(BalanceRecord(record.account_code, day.isoformat(), "JOURNAL",
+                                                    record.closing_cents, record.closing_cents, 0, 0,
+                                                    "当日无登记（由近 31 天汇总推得期末）"))
 
 
 def list_portal_accounts(client: ZtoClient) -> list[dict[str, Any]]:
