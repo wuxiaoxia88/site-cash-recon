@@ -1,0 +1,43 @@
+{% extends "layout.html" %}{% block title %}待处理{% endblock %}
+{% block body %}
+{% set KIND_CN = {'withdraw_unknown':'中天提现去向待确认','topup_unmatched':'付款给总部未见充值','journal_unmatched':'日记账未对上银行流水',
+ 'contradiction':'科目与方向矛盾','adjust':'余额修改','transfer_out_unknown':'转出至体系外','transfer_in_unknown':'转入来源不明',
+ 'unmapped_account':'未配置账户','manual_broken':'人工结论失效','':'其他'} %}
+<div class="card"><h1>待处理（近 {{ days }} 天）</h1>
+<div class="row small">
+ <a href="{{ url_for('review', days=days) }}" class="tag {{ 'ok' if not kind }}">全部</a>
+ {% for k in kinds %}<a href="{{ url_for('review', days=days, kind=k.kind) }}" class="tag {{ 'ok' if kind==k.kind }}">{{ KIND_CN.get(k.kind, k.kind) }} {{ k.n }} 笔 / {{ k.a|yuan }}</a>{% endfor %}
+ <span class="muted">· 时间范围：</span>{% for d in (7, 31, 92) %}<a href="{{ url_for('review', days=d, kind=kind) }}">{{ d }} 天</a> {% endfor %}
+</div></div>
+<form method="post" action="{{ url_for('decide') }}" class="card">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="row">
+ <select name="decision">{% for k, v in DECISIONS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+ <select name="category"><option value="">（科目，可选）</option>{% for c in categories %}<option value="{{ c.code }}">{{ c.name }}</option>{% endfor %}</select>
+ <input name="target_flow_id" placeholder="对应流水编号（重复/划转时填写）" size="30">
+ <input name="note" placeholder="说明，例如：店主提取" size="24">
+ <button type="submit">处理选中记录</button>
+</div>
+<p class="small muted">勾选记录后选择处理方式。选好科目后点某行的“建规则”，以后同类记录会自动归类。所有操作都会立即重新计算受影响日期的结果和日报。</p>
+<div class="scroll"><table class="review">
+<tr><th><input type="checkbox" onclick="for(const c of document.querySelectorAll('.pick'))c.checked=this.checked"></th>
+<th>日期</th><th>账户</th><th>收付</th><th class="n">金额</th><th>科目/摘要</th><th>原因</th><th>流水编号</th><th></th></tr>
+{% for r in rows %}<tr>
+<td><input type="checkbox" class="pick" name="flow_id" value="{{ r.flow_id }}"></td>
+<td class="small">{{ r.biz_time[:16] }}</td><td>{{ r.account_name or r.account_code }}</td>
+<td>{{ '收' if r.direction=='IN' else '付' }}</td><td class="n">{{ r.amount_cents|yuan }}</td>
+<td class="small">{{ r.src_category }}{% if r.counterparty %}<br><span class="muted">{{ r.counterparty }}</span>{% endif %}{% if r.summary %}<br><span class="muted">{{ r.summary[:40] }}</span>{% endif %}</td>
+<td class="small"><span class="tag {{ r.state }}">{{ '在途' if r.state=='PENDING' else '待核' }}</span> {{ r.reason }}</td>
+<td class="small muted">{{ r.flow_id }}</td>
+<td class="small">{% if r.src_category %}<button class="light" formaction="{{ url_for('rule_from_flow') }}" name="rule" value="src_category|{{ r.flow_id }}">按科目建规则</button>{% endif %}
+{% if r.counterparty %}<button class="light" formaction="{{ url_for('rule_from_flow') }}" name="rule" value="counterparty|{{ r.flow_id }}">按对方建规则</button>{% endif %}</td>
+</tr>{% else %}<tr><td colspan="9" class="muted">没有待处理记录 🎉</td></tr>{% endfor %}
+</table></div></form>
+<div class="card"><h2>最近的人工处理</h2><div class="scroll"><table class="small">
+<tr><th>时间</th><th>流水</th><th>账户</th><th class="n">金额</th><th>结论</th><th>科目</th><th>说明</th><th></th></tr>
+{% for d in decided %}<tr><td>{{ d.created_at[:16] }}</td><td>{{ d.biz_date }} {{ d.src_category }}</td><td>{{ d.account_name }}</td>
+<td class="n">{{ d.amount_cents|yuan }}</td><td>{{ DECISIONS.get(d.decision, d.decision) }}{% if d.target_flow_id %} → {{ d.target_flow_id }}{% endif %}</td>
+<td>{{ d.category|catname if d.category else '' }}</td><td>{{ d.note }}</td>
+<td><form method="post" action="{{ url_for('undo') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="flow_id" value="{{ d.flow_id }}"><button class="light">撤销</button></form></td></tr>
+{% else %}<tr><td colspan="8" class="muted">暂无</td></tr>{% endfor %}</table></div></div>
+{% endblock %}

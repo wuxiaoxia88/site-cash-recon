@@ -1,0 +1,4 @@
+{% extends "layout.html" %}{% block title %}开始使用{% endblock %}
+{% block body %}<div class="card"><h1>还没有任何日结果</h1>
+<p>先采集并计算数据：在“运行记录”页点击“完整日任务”，或在命令行运行 <code>cashrecon fetch --from 开始日期 --to 结束日期</code> 和 <code>cashrecon recon --from … --to …</code>。</p>
+<a class="btn" href="{{ url_for('runs') }}">前往运行记录</a></div>{% endblock %}

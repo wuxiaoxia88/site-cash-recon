@@ -1,0 +1,15 @@
+{% extends "layout.html" %}{% block title %}余额录入{% endblock %}
+{% block body %}
+<form class="card" method="post"><h1>录入账户实际余额</h1>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<p class="small muted">每周末核对人工登记账户（支付宝/微信/银行卡）时，在手机或网银查看实际余额后填写。系统会与当日账面期末比对，差额会出现在日报里。</p>
+<div class="row"><select name="account">{% for a in accounts %}<option value="{{ a.code }}">{{ a.name }}{{ '（人工登记）' if not a.is_auto else '' }}</option>{% endfor %}</select>
+<input type="datetime-local" name="as_of" value="{{ now }}" required>
+<input name="amount" placeholder="实际余额（元）" required inputmode="decimal">
+<input name="note" placeholder="备注（如含个人资金请注明）" size="28">
+<button>保存并比对</button></div></form>
+<div class="card scroll"><h2>最近录入</h2><table>
+<tr><th>时间</th><th>账户</th><th class="n">实际余额</th><th class="n">账面期末</th><th class="n">差额</th><th>备注</th></tr>
+{% for e in entries %}<tr><td>{{ e.as_of }}</td><td>{{ e.name or e.account_code }}</td><td class="n">{{ e.balance_cents|yuan }}</td>
+<td class="n">{{ e.book|yuan }}</td><td class="n {{ 'neg' if e.diff }}">{{ e.diff|yuan(sign=True) if e.diff is not none else '当日尚无账面' }}</td><td>{{ e.note }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">暂无</td></tr>{% endfor %}</table></div>{% endblock %}

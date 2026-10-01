@@ -1,0 +1,19 @@
+{% extends "layout.html" %}{% block title %}分类规则{% endblock %}
+{% block body %}
+<form class="card" method="post"><h1>新增分类规则</h1><input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="row">
+<select name="source"><option value="*">任意来源</option><option value="ZT_SUMMARY">中天科目分项</option><option value="JOURNAL">日记账</option><option value="BANK_SMS">对公卡短信</option><option value="ALIPAY">支付宝</option><option value="ICBC">工行</option><option value="ZT_FLOW">中天逐笔</option></select>
+<select name="field"><option value="src_category">来源科目/分类</option><option value="counterparty">对方</option><option value="summary">摘要</option><option value="path">中天科目路径</option></select>
+<select name="op"><option value="contains">包含</option><option value="equals">等于</option><option value="prefix">开头是</option><option value="regex">正则</option></select>
+<input name="pattern" placeholder="匹配内容" required>
+<select name="direction"><option value="*">收付均可</option><option value="IN">收</option><option value="OUT">付</option></select>
+<select name="category">{% for c in categories %}<option value="{{ c.code }}">{{ c.name }}</option>{% endfor %}</select>
+<input name="priority" value="5" size="3" title="数字越小越优先">
+<input name="note" placeholder="说明">
+<button>新增并重算</button></div></form>
+<div class="card scroll"><table class="small">
+<tr><th>优先级</th><th>来源</th><th>字段</th><th>方式</th><th>匹配内容</th><th>收付</th><th>归入科目</th><th>类型</th><th>说明</th><th></th></tr>
+{% for r in rows %}<tr style="{{ 'opacity:.45' if not r.enabled }}"><td>{{ r.priority }}</td><td>{{ r.source }}</td><td>{{ r.field }}</td><td>{{ r.op }}</td>
+<td>{{ r.pattern }}</td><td>{{ r.direction }}</td><td>{{ r.category|catname }}</td><td>{{ '自定义' if r.origin=='user' else '默认' }}</td><td>{{ r.note }}</td>
+<td><form method="post" action="{{ url_for('toggle_rule', rule_id=r.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="light">{{ '停用' if r.enabled else '启用' }}</button></form></td></tr>{% endfor %}
+</table></div>{% endblock %}

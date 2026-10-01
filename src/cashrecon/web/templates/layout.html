@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light only">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}控制台{% endblock %}｜{{ site }}</title>
+<style>
+:root{--ink:#1f2328;--muted:#57606a;--line:#d0d7de;--bg:#f6f8fa;--brand:#0a4da2;--pos:#1a7f37;--neg:#cf222e}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif}
+nav{background:var(--brand);color:#fff;display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:8px 16px}
+nav b{margin-right:12px}nav a{color:#fff;text-decoration:none;padding:4px 10px;border-radius:6px;opacity:.9}
+nav a.on,nav a:hover{background:rgba(255,255,255,.18);opacity:1}nav .job{margin-left:auto;font-size:12px}
+main{max-width:1180px;margin:0 auto;padding:16px}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+h1{font-size:18px;margin:0 0 10px}h2{font-size:15px;margin:0 0 8px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--bg);font-size:12px;color:var(--muted)}td.n,th.n{text-align:right;white-space:nowrap}
+.neg{color:var(--neg)}.pos{color:var(--pos)}.muted{color:var(--muted)}.small{font-size:12px}
+.flash{background:#dafbe1;border:1px solid #aceebb;border-radius:8px;padding:8px 12px;margin-bottom:12px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}@media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
+.kpi .v{font-size:20px;font-weight:700}.kpi .l{font-size:12px;color:var(--muted)}
+button,.btn{background:var(--brand);color:#fff;border:0;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px;text-decoration:none;display:inline-block}
+button.light{background:#fff;color:var(--brand);border:1px solid var(--line)}
+input,select,textarea{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px;max-width:100%}
+.tag{display:inline-block;padding:0 6px;border-radius:4px;font-size:12px;border:1px solid var(--line);color:var(--muted)}
+.tag.REVIEW,.tag.failed,.tag.bad{background:#ffebe9;color:var(--neg);border-color:#ffcecb}.tag.PENDING,.tag.partial{background:#fff8c5;color:#9a6700}
+.tag.ok,.tag.success,.tag.verified,.tag.sent,.tag.NORMAL{background:#dafbe1;color:var(--pos);border-color:#aceebb}
+.items li{margin-bottom:6px}.lv-high{color:var(--neg);font-weight:700}.lv-medium{color:#bc4c00;font-weight:700}.lv-low{color:var(--muted)}
+.scroll{overflow-x:auto}
+table.review td:nth-child(2){white-space:nowrap}table.review td:nth-child(3){min-width:90px}table.review td:nth-child(7){min-width:240px}table.review{font-size:13px}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+</style>
+</head>
+<body>
+<nav><b>{{ site }} · 资金控制台</b>
+{% set ep = request.endpoint %}
+<a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep=='dashboard' }}">总览</a>
+<a href="{{ url_for('reports') }}" class="{{ 'on' if ep=='reports' }}">报表</a>
+<a href="{{ url_for('review') }}" class="{{ 'on' if ep=='review' }}">待处理</a>
+<a href="{{ url_for('flows') }}" class="{{ 'on' if ep=='flows' }}">当日流水</a>
+<a href="{{ url_for('balances') }}" class="{{ 'on' if ep=='balances' }}">余额录入</a>
+<a href="{{ url_for('rules') }}" class="{{ 'on' if ep=='rules' }}">分类规则</a>
+<a href="{{ url_for('runs') }}" class="{{ 'on' if ep=='runs' }}">运行记录</a>
+<span class="job">{% if job.running %}后台任务运行中…{% elif job.last %}上次后台任务：{{ job.last.action }} {{ job.last.date }} {{ job.last.result or '' }}{% endif %}</span>
+</nav>
+<main>
+{% with messages = get_flashed_messages() %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

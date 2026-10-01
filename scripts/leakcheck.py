@@ -29,7 +29,8 @@ SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".p
 PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("secret-assignment", re.compile(
         r"\b[A-Za-z0-9_]*(?:api[_-]?key|API[_-]?KEY|[Tt]oken|TOKEN|[Ss]ecret|SECRET|[Pp]assword|PASSWORD)"
-        r"[A-Za-z0-9_]*\s*[=:]\s*['\"]?(?!<)(?![A-Z]+(?:_[A-Z0-9]+)+\b)[A-Za-z0-9_\-./+]{16,}")),
+        r"[A-Za-z0-9_]*\s*[=:]\s*['\"]?(?!<)(?![A-Z]+(?:_[A-Z0-9]+)+\b)[A-Za-z0-9_\-./+]{16,}"
+        r"(?![A-Za-z0-9_\-./+]*\()")),  # ignore code such as token = request.form.get(...)
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.")),
     ("bearer", re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{20,}")),
     ("mobile", re.compile(r"(?<![\d.])1[3-9]\d{9}(?![\d.])")),

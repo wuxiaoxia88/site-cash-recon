@@ -25,6 +25,7 @@ def test_allows_placeholders_and_examples():
     assert labels("user@example.com") == []
     assert labels("ZTO_KB_AGENT_TOKEN=<token>") == []
     assert labels("token = ZTO_KB_AGENT_TOKEN") == []
+    assert labels('token = request.form.get("csrf", "")') == []
 
 
 def test_denylist_terms():

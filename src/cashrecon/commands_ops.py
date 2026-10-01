@@ -69,6 +69,13 @@ def cmd_deliver(args: argparse.Namespace) -> int:
     return 1 if any(r.status == "failed" for r in results) else 0
 
 
+def cmd_web(args: argparse.Namespace) -> int:
+    from cashrecon.paths import Paths
+    from cashrecon.web import serve
+    serve(Paths.resolve(args.home), host=args.host, port=args.port, open_browser=args.open)
+    return 0
+
+
 def register(sub: argparse._SubParsersAction) -> None:
     from cashrecon.commands import add_range
     p = sub.add_parser("recon", help="重算对账与日结果")
@@ -95,3 +102,9 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force", action="store_true", help="忽略投递台账强制重发（慎用）")
     p.set_defaults(func=cmd_deliver)
+
+    p = sub.add_parser("web", help="启动本地网页控制台")
+    p.add_argument("--host", help="监听地址（默认 127.0.0.1；开放局域网需设置 CASHRECON_WEB_PASSWORD）")
+    p.add_argument("--port", type=int)
+    p.add_argument("--open", action="store_true", help="启动后打开浏览器")
+    p.set_defaults(func=cmd_web)

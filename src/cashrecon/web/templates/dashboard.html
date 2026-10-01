@@ -1,0 +1,23 @@
+{% extends "layout.html" %}{% block title %}总览{% endblock %}
+{% block body %}
+<div class="card"><h1>{{ p.day }}（{{ p.weekday }}） <span class="tag {{ 'ok' if p.data_status=='OK' else 'partial' }}">数据{{ {'OK':'完整','PARTIAL':'部分不完整','MISSING':'有缺失'}[p.data_status] }}</span></h1>
+<p style="font-size:15px;font-weight:600">{{ headline }}</p>
+<div class="kpis">
+ <div class="kpi"><div class="l">当日经营利润</div><div class="v {{ 'neg' if p.profit.profit < 0 else 'pos' }}">{{ p.profit.profit|yuan }}</div></div>
+ <div class="kpi"><div class="l">本月累计经营利润</div><div class="v {{ 'neg' if month_profit < 0 else '' }}">{{ month_profit|yuan }}</div></div>
+ <div class="kpi"><div class="l">现金头寸</div><div class="v">{{ p.position.total|yuan }}</div></div>
+ <div class="kpi"><div class="l">待处理</div><div class="v">{{ items|selectattr('level','ne','low')|list|length }}</div></div>
+</div></div>
+<div class="card"><h2>需要处理</h2>
+<ul class="items">{% for i in items %}<li><span class="lv-{{ i.level }}">[{{ i.level_cn }}]</span> {{ i.title }}
+ {% if i.detail %}<span class="small muted">— {{ i.detail }}</span>{% endif %}<br><span class="small" style="color:#0a4da2">{{ i.action }}</span></li>
+{% else %}<li class="muted">没有待处理事项</li>{% endfor %}</ul>
+<a class="btn" href="{{ url_for('review') }}">去处理待核记录</a>
+<a class="btn light" href="{{ url_for('report_file', cadence='daily', key=p.day, name='网点资金日报-' ~ p.day ~ '.html') }}" target="_blank">打开当日日报</a></div>
+<div class="card"><h2>近 30 日经营利润</h2>{{ chart_profit|safe }}<h2>现金头寸</h2>{{ chart_position|safe }}</div>
+<div class="card"><h2>账户余额（{{ p.day }} 期末）</h2><div class="scroll"><table>
+<tr><th>账户</th><th class="n">期末</th><th>核对</th></tr>
+{% for a in p.accounts %}<tr><td>{{ a.name }} <span class="small muted">{{ a.collection }}</span></td><td class="n">{{ a.closing|yuan }}</td>
+<td><span class="tag {{ {'MATCH':'ok','DIFF':'bad','MISSING':'bad'}.get(a.status,'') }}">{{ a.status_cn }}</span></td></tr>{% endfor %}
+</table></div></div>
+{% endblock %}
