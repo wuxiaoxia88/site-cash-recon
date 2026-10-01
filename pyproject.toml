@@ -26,6 +26,7 @@ cashrecon = "cashrecon.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cashrecon"]
+artifacts = ["src/cashrecon/**/*.toml", "src/cashrecon/**/*.html", "src/cashrecon/**/*.css", "src/cashrecon/examples/*"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "docs", "scripts", "README.md", "LICENSE"]
