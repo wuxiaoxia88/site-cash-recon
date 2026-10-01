@@ -1,0 +1,6 @@
+#!/bin/sh
+# Block commits that may leak private site data (see scripts/leakcheck.py).
+PY=python3
+[ -x .venv/bin/python ] && PY=.venv/bin/python
+[ -x .venv/Scripts/python.exe ] && PY=.venv/Scripts/python.exe
+exec "$PY" scripts/leakcheck.py --staged

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  leakcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Scan for private data
+        run: python scripts/leakcheck.py
+
+  test:
+    needs: leakcheck
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Lint
+        run: python -m ruff check src tests scripts
+      - name: Test
+        run: python -m pytest
+      - name: CLI smoke test
+        shell: bash
+        env:
+          CASHRECON_HOME: ${{ runner.temp }}/cashrecon-home
+        run: |
+          cashrecon version
+          cashrecon init
+          cashrecon doctor --offline || test $? -eq 1

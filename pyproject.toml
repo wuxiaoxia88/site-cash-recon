@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "site-cash-recon"
+version = "0.1.0"
+description = "网点现金对账与财务报表系统：多源资金流水采集、对账、利润、报表、预警与本地控制台"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "wuxiaoxia88" }]
+dependencies = [
+  "jinja2>=3.1",
+  "flask>=3.0",
+  "waitress>=3.0",
+  "tomli-w>=1.0",
+  "tzdata>=2024.1; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+cashrecon = "cashrecon.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cashrecon"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "scripts", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]

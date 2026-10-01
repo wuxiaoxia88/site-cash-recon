@@ -1,0 +1,157 @@
+# site-cash-recon 配置示例
+# 复制到数据目录（默认 ~/.site-cash-recon/config.toml，Windows 为 %USERPROFILE%\.site-cash-recon\config.toml）
+# 后按实际网点修改。密钥不要写在这里，写在同目录的 secrets.env（模板见安装包 cashrecon/examples/secrets.env.example，`cashrecon init` 会自动生成）。
+
+[site]
+name = "示例网点"          # 报表标题显示的网点名称
+slug = "example-site"      # 知识库路径等使用的英文短名
+
+# ---------------------------------------------------------------- 账户
+# type: ZT_PREPAY(中天预付款) CORP_BANK(对公卡) BANK_CARD ALIPAY WECHAT CASH OTHER
+# collection: auto = 有自动采集（银行短信/支付宝账单/中天流水）；manual = 只靠日记账人工登记
+# portal_code: 门户“网点日记账”账户编码（账户管理页可见，形如 SJA...）
+[[accounts]]
+code = "ZT_MAIN"
+name = "中天主账户"
+type = "ZT_PREPAY"
+collection = "auto"
+low_balance_yuan = 5000
+
+[[accounts]]
+code = "CORP"
+name = "对公银行卡"
+type = "CORP_BANK"
+collection = "auto"
+portal_code = ""
+bank_tail = "0000"
+
+[[accounts]]
+code = "OWNER_ALIPAY"
+name = "店主支付宝"
+type = "ALIPAY"
+collection = "auto"
+portal_code = ""
+personal_funds = true
+
+[[accounts]]
+code = "ICBC_CARD"
+name = "工行卡"
+type = "BANK_CARD"
+collection = "auto"
+portal_code = ""
+bank_tail = "0000"
+personal_funds = true
+
+[[accounts]]
+code = "STAFF_ALIPAY"
+name = "人工支付宝"
+type = "ALIPAY"
+collection = "manual"
+portal_code = ""
+personal_funds = true
+
+[[accounts]]
+code = "STAFF_WECHAT"
+name = "人工微信"
+type = "WECHAT"
+collection = "manual"
+portal_code = ""
+personal_funds = true
+
+[[accounts]]
+code = "CCB_CARD"
+name = "人工建行卡"
+type = "BANK_CARD"
+collection = "manual"
+portal_code = ""
+personal_funds = true
+
+# ---------------------------------------------------------------- 数据源
+# required = true 表示该来源失败时当日数据状态为“缺失”
+[sources.ZT_SUMMARY]          # 中天汇总+科目（zto-cli）
+enabled = true
+required = true
+account = "ZT_MAIN"
+
+[sources.ZT_FLOW]             # 中天逐笔流水
+enabled = true
+required = false
+account = "ZT_MAIN"
+impl = "api"                  # api = zto-cli 逐笔接口；monitor_db = 读取上游监控库（只读）
+monitor_db = ""               # impl = monitor_db 时填写 monitor.db 绝对路径
+
+[sources.JOURNAL]             # 门户网点日记账（zto-cli）
+enabled = true
+required = true
+
+[sources.BANK_LEDGER]         # 上游银行采集库 ledger.sqlite（只读）
+enabled = false
+required = true
+ledger_db = ""
+corp_account = "CORP"         # transactions 表（短信）对应账户
+icbc_account = "ICBC_CARD"    # icbc_txns 表对应账户
+alipay_account = "OWNER_ALIPAY"  # alipay_txns 表对应账户
+alipay_bill_dir = ""          # 可选：支付宝官方账务明细 CSV 根目录（按日期子目录）
+
+[sources.BILL_PROFIT]         # 账单口径利润（对照，zto-cli）
+enabled = false
+required = false
+
+# ---------------------------------------------------------------- 规则
+[rules]
+dedup_days = 2                # 日记账与自动采集重复识别的日期窗口
+transfer_days = 1             # 内部划转两端的日期窗口
+withdraw_days = 3             # 中天提现到账窗口
+transfer_fee_floor_yuan = 5
+transfer_fee_ratio = 0.006
+zt_topup_counterparties = ["中通快递股份有限公司"]
+
+# 中天提现发起人 → 去向（掌中通账号: 账户代码 或 科目代码）
+[withdraw_initiators]
+# "00000.001" = { account = "ICBC_CARD" }
+# "00000.002" = { category = "COST_LABOR", note = "工资" }
+
+# ---------------------------------------------------------------- 预警
+[alerts]
+loss = true                   # 现金口径经营利润为负时预警
+loss_streak_days = 3
+balance_diff_yuan = 100
+default_low_balance_yuan = 1000
+unmatched_single_yuan = 500
+unmatched_daily_yuan = 2000
+unclassified_ratio = 0.05
+withdraw_overdue_days = 3
+cooldown_hours = 24
+
+# ---------------------------------------------------------------- 调度（北京时间）
+[schedule]
+daily = "12:10"
+retry = "18:00"
+weekly = "MON 12:20"
+monthly = "3 12:30"
+
+# ---------------------------------------------------------------- 投递
+[delivery.kb]
+enabled = false
+base_urls = []                # 依次尝试，例如局域网地址在前、公网地址在后
+agent_name = "site-cash-recon"
+destination_prefix = "internal/reports/cash-recon"
+visibility = "internal"
+category = "经营报表"
+public_base_url = ""          # 报表链接展示用，例如 https://kb.example.com
+
+[delivery.mail]
+enabled = false
+method = "agently"            # agently（agently-cli）或 smtp
+to = []
+subject_prefix = "【网点资金日报】"
+
+# ---------------------------------------------------------------- 分析
+[analysis]
+llm = false                   # 开启后需在 secrets.env 配置 ANTHROPIC_API_KEY
+model = "claude-sonnet-5-5"
+
+# ---------------------------------------------------------------- 控制台
+[web]
+host = "127.0.0.1"
+port = 8765

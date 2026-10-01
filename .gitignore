@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Never commit private site data (these normally live in ~/.site-cash-recon)
+config.toml
+secrets.env
+*.env
+!.env.example
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+reports/
+logs/
+backups/
+data/
+private/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
