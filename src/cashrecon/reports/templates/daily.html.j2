@@ -1,0 +1,85 @@
+{% extends "base.html.j2" %}
+{% from "macros.html.j2" import money, items_list, sources_table %}
+{% block body %}
+{% set p = v.p %}{% set pr = p.profit %}
+<div class="kpis">
+  <div class="kpi"><div class="label">经营利润（现金口径）</div>
+    <div class="value {{ 'neg' if pr.profit < 0 else 'pos' }}">{{ pr.profit|yuan }}</div>
+    <div class="hint">{% if v.delta.profit is not none %}较昨日 {{ v.delta.profit|yuan(sign=True) }}{% else %}&nbsp;{% endif %}{% if not pr.complete %} · 中天数据缺失{% endif %}</div></div>
+  <div class="kpi"><div class="label">经营收入</div><div class="value">{{ pr.income|yuan }}</div>
+    <div class="hint">中天 {{ (v.income_lines|sum(attribute='zt'))|yuan }} · 线下 {{ (v.income_lines|sum(attribute='offline'))|yuan }}</div></div>
+  <div class="kpi"><div class="label">经营成本</div><div class="value">{{ pr.cost|yuan }}</div>
+    <div class="hint">{% if pr.income %}成本收入比 {{ (pr.cost / pr.income)|pct }}{% else %}&nbsp;{% endif %}</div></div>
+  <div class="kpi"><div class="label">现金头寸（7 个账户）</div><div class="value">{{ p.position.total|yuan }}</div>
+    <div class="hint">{% if v.delta.position is not none %}较昨日 {{ v.delta.position|yuan(sign=True) }}{% endif %} · 已核对 {{ p.position.verified|wan }}</div></div>
+</div>
+
+<section><h2>需要处理（{{ v['items']|length }}）</h2>{{ items_list(v['items']) }}</section>
+
+<section><h2>账户余额</h2>
+<div class="scroll"><table>
+<tr><th>账户</th><th class="n">期初</th><th class="n">收入</th><th class="n">支出</th><th class="n">期末</th><th>核对</th></tr>
+{% for a in p.accounts %}
+<tr><td>{{ a.name }} <span class="muted small">{{ a.collection }}{% if a.personal_funds %}·个人账户{% endif %}</span>
+  {% if a.below_low %}<span class="tag bad">低于 {{ a.low_balance|yuan }}</span>{% endif %}</td>
+  <td class="n">{{ a.opening|yuan }}</td><td class="n">{{ a.inflow|yuan }}</td><td class="n">{{ a.outflow|yuan }}</td>
+  <td class="n"><b>{{ a.closing|yuan }}</b></td>
+  <td><span class="tag {{ {'MATCH':'ok','DIFF':'bad','MISSING':'bad'}.get(a.status,'') }}">{{ a.status_cn }}</span>
+    {% for c in a.checks if c.diff %}<div class="small {{ 'neg' if c.kind != 'info' else 'muted' }}">{{ c.label }} 差 {{ c.diff|yuan(sign=True) }}</div>{% endfor %}
+    {% if a.note %}<div class="small muted">{{ a.note }}</div>{% endif %}</td></tr>
+{% endfor %}
+<tr class="total"><td>合计</td><td></td><td></td><td></td><td class="n">{{ p.position.total|yuan }}</td>
+  <td class="small muted">其中个人账户 {{ p.position.personal_funds|wan }}</td></tr>
+</table></div></section>
+
+<section><h2>利润表（现金口径）</h2>
+<div class="cols">
+{% for title, lines, total in [("收入", v.income_lines, pr.income), ("成本", v.cost_lines, pr.cost)] %}
+<div><h3>{{ title }} {{ total|yuan }}</h3>
+<table><tr><th>科目</th><th class="n">中天</th><th class="n">线下</th><th class="n">合计</th></tr>
+{% for x in lines|sort(attribute='total', reverse=(title == "收入")) %}
+<tr><td>{{ x.name }}</td><td class="n">{{ x.zt|yuan(blank_zero=True) }}</td>
+<td class="n">{{ x.offline|yuan(blank_zero=True) }}</td><td class="n">{{ money(x.total) }}</td></tr>
+{% else %}<tr><td colspan="4" class="muted">无</td></tr>{% endfor %}
+</table></div>
+{% endfor %}
+</div>
+{% set u = pr.unclassified %}
+{% if u.count %}<p class="small muted">另有待分类 {{ u.count }} 项（收 {{ u['in']|yuan }}，付 {{ u.out|yuan }}{% if u.zt %}，中天 {{ u.zt|yuan(sign=True) }}{% endif %}），未计入利润。</p>{% endif %}
+{% if p.bill_profit %}{% set b = p.bill_profit %}
+<p class="small">账单口径对照：收入 {{ b.income_cents|yuan }}，支出 {{ b.expense_cents|yuan }}，利润 <b class="{{ 'neg' if b.profit_cents < 0 else '' }}">{{ b.profit_cents|yuan }}</b>
+{% if b.missing_cn %}<span class="muted">（缺少：{{ b.missing_cn|join('、') }}）</span>{% endif %}
+<span class="muted">。两种口径差异来自结算时间差与账单未覆盖的线下收支。</span></p>{% endif %}
+</section>
+
+<section><h2>资金去向</h2>
+{% set m = p.movements %}
+<table>
+{% for code, amount in m.totals.items() %}<tr><td>{{ m.totals_cn[code] }}</td><td class="n">{{ money(amount) }}</td></tr>{% endfor %}
+</table>
+{% if m.withdrawals_by_initiator %}<h3>中天提现（按发起人）</h3>
+<table><tr><th>发起人</th><th class="n">笔数</th><th class="n">金额</th><th class="n">已找到入账</th><th>用途</th></tr>
+{% for w in m.withdrawals_by_initiator %}<tr><td>{{ w.initiator }}</td><td class="n">{{ w.count }}</td><td class="n">{{ w.amount|yuan }}</td>
+<td class="n">{{ w.landed|yuan }}</td><td class="small">{{ w.mapped or '待确认' }}</td></tr>{% endfor %}
+</table>{% endif %}
+{% if m.transfers %}<h3>已匹配的划转/充值</h3>
+<table><tr><th>类型</th><th>从</th><th>到</th><th class="n">金额</th></tr>
+{% for t in m.transfers %}<tr><td>{{ {"TRANSFER":"账户间划转","ZT_TOPUP":"中天充值","ZT_WITHDRAW":"中天提现到账"}[t.kind] }}</td>
+<td>{{ t['from'] }}</td><td>{{ t.to }}</td><td class="n">{{ t.amount|yuan }}{% if t.fee %}<span class="muted small">（手续费 {{ t.fee|yuan }}）</span>{% endif %}</td></tr>{% endfor %}
+</table>{% endif %}
+</section>
+
+{% if v.analysis %}<section class="analysis"><h2>财务分析</h2>
+{% for a in v.analysis %}<p><b>{{ a.title }}：</b>{{ a.text }}</p>{% endfor %}</section>{% endif %}
+
+<section><h2>趋势（近 30 日）</h2>
+<h3>经营利润</h3>{{ v.chart_profit|safe }}
+<h3>现金头寸</h3>{{ v.chart_position|safe }}</section>
+
+<section><h2>对账与数据</h2>
+{% set r = p.recon %}
+<p>当日流水：{% for k, n in r.counts_cn.items() %}{{ k }} {{ n }} 笔{% if not loop.last %}，{% endif %}{% endfor %}。
+自动识别日记账与银行重复登记 {{ r.duplicates }} 笔（已剔除，避免重复计算）。在途 {{ r.pending|length }} 笔。</p>
+{{ sources_table(p.sources) }}
+</section>
+{% endblock %}

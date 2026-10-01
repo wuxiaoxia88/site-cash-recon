@@ -1,0 +1,30 @@
+{% macro money(c) -%}
+<span class="{{ 'neg' if c is not none and c < 0 else '' }}">{{ c|yuan }}</span>
+{%- endmacro %}
+
+{% macro items_list(items) -%}
+{% if items %}
+<ul class="items">
+{% for i in items %}
+<li class="{{ i.level }}"><span class="lv">{{ i.level_cn }}</span><span class="t">{{ i.title }}</span>
+  {% if i.detail %}<div class="small">{{ i.detail }}</div>{% endif %}
+  {% if i.action %}<div class="act">建议：{{ i.action }}</div>{% endif %}
+  {% if i.samples %}<details><summary>查看明细（{{ i.samples|length }}{% if i.count > i.samples|length %}/{{ i.count }}{% endif %}）</summary>
+  <table class="small"><tr><th>日期</th><th>账户</th><th>收付</th><th class="n">金额</th><th>说明</th></tr>
+  {% for s in i.samples %}<tr><td>{{ s.date[5:] }} {{ s.time }}</td><td>{{ s.account }}</td><td>{{ s.direction }}</td>
+  <td class="n">{{ s.amount|yuan }}</td><td>{{ s.text }}{% if s.initiator %}（{{ s.initiator }}）{% endif %}</td></tr>{% endfor %}
+  </table></details>{% endif %}
+</li>
+{% endfor %}
+</ul>
+{% else %}<p class="muted">今天没有需要处理的事项。</p>{% endif %}
+{%- endmacro %}
+
+{% macro sources_table(sources) -%}
+<table class="small"><tr><th>数据来源</th><th>状态</th><th class="n">记录</th><th>说明</th></tr>
+{% for s in sources %}<tr><td>{{ s.name }}{% if not s.required %}<span class="muted">（参考）</span>{% endif %}</td>
+<td><span class="tag {{ 'ok' if s.status in ('ok','empty') and not s.incomplete else ('bad' if s.status in ('failed','never') else 'warn') }}">
+{{ {"ok":"正常","empty":"无记录","failed":"失败","never":"未采集"}.get(s.status, s.status) }}{% if s.incomplete %}·可能不完整{% endif %}</span></td>
+<td class="n">{{ s.rows }}</td><td class="muted">{{ s.get('anomaly') or s.note or '' }}</td></tr>{% endfor %}
+</table>
+{%- endmacro %}

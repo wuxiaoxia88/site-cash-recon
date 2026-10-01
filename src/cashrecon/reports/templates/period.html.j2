@@ -1,0 +1,62 @@
+{% extends "base.html.j2" %}
+{% from "macros.html.j2" import money, items_list %}
+{% block body %}
+{% set a = v.agg %}
+<div class="kpis">
+  <div class="kpi"><div class="label">经营利润（现金口径）</div>
+    <div class="value {{ 'neg' if a.profit < 0 else 'pos' }}">{{ a.profit|yuan }}</div>
+    <div class="hint">{% if v.delta_profit is not none %}较上期 {{ v.delta_profit|yuan(sign=True) }}{% else %}无上期数据{% endif %}</div></div>
+  <div class="kpi"><div class="label">经营收入</div><div class="value">{{ a.income|yuan }}</div>
+    <div class="hint">日均 {{ (a.income / v.days_present)|round|int|yuan }}</div></div>
+  <div class="kpi"><div class="label">经营成本</div><div class="value">{{ a.cost|yuan }}</div>
+    <div class="hint">{% if a.income %}成本收入比 {{ (a.cost / a.income)|pct }}{% endif %}</div></div>
+  <div class="kpi"><div class="label">期末现金头寸</div><div class="value">{{ v.position_end.total|yuan }}</div>
+    <div class="hint">亏损 {{ v.loss_days|length }} 天 / 共 {{ v.days_present }} 天</div></div>
+</div>
+
+{% if v.missing_days %}<section><h2>数据缺口</h2><p class="neg">以下日期没有日结果，本期合计不含这些天：{{ v.missing_days|join('、') }}</p></section>{% endif %}
+
+<section><h2>每日走势</h2>
+<h3>经营利润</h3>{{ v.chart_profit|safe }}
+<h3>现金头寸</h3>{{ v.chart_position|safe }}
+<details><summary>逐日明细</summary>
+<div class="scroll"><table class="small"><tr><th>日期</th><th class="n">收入</th><th class="n">成本</th><th class="n">经营利润</th><th class="n">现金头寸</th><th>数据</th><th class="n">待核</th></tr>
+{% for d in v.daily %}<tr><td>{{ d.day[5:] }} {{ d.weekday }}</td><td class="n">{{ d.income|yuan }}</td><td class="n">{{ d.cost|yuan }}</td>
+<td class="n">{{ money(d.profit) }}</td><td class="n">{{ d.position|yuan }}</td><td>{{ {"OK":"完整","PARTIAL":"部分","MISSING":"缺失"}[d.status] }}</td><td class="n">{{ d.review }}</td></tr>{% endfor %}
+</table></div></details>
+</section>
+
+<section><h2>利润表（现金口径）</h2>
+<div class="scroll"><table>
+<tr><th>科目</th><th class="n">中天</th><th class="n">线下</th><th class="n">本期</th><th class="n">上期</th><th class="n">变化</th></tr>
+{% for kind, label in [("income","收入"),("cost","成本")] %}
+<tr><td colspan="6"><b>{{ label }}</b></td></tr>
+{% for x in a.lines if x.kind == kind %}
+<tr><td>{{ x.name }}</td><td class="n">{{ x.zt|yuan(blank_zero=True) }}</td><td class="n">{{ x.offline|yuan(blank_zero=True) }}</td>
+<td class="n">{{ money(x.total) }}</td><td class="n">{{ x.prev|yuan }}</td><td class="n">{{ money(x.change) }}</td></tr>
+{% endfor %}{% endfor %}
+<tr class="total"><td>经营利润</td><td></td><td></td><td class="n">{{ money(a.profit) }}</td><td class="n">{{ (v.prev.profit if v.prev else none)|yuan }}</td><td class="n">{{ money(v.delta_profit) }}</td></tr>
+</table></div>
+{% if a.unclassified.count %}<p class="small muted">待分类 {{ a.unclassified.count }} 项（收 {{ a.unclassified['in']|yuan }}，付 {{ a.unclassified.out|yuan }}），未计入利润。</p>{% endif %}
+{% if a.bill %}<p class="small">账单口径对照（{{ a.bill.days }} 天）：收入 {{ a.bill.income_cents|yuan }}，支出 {{ a.bill.expense_cents|yuan }}，利润 {{ money(a.bill.profit_cents) }}。</p>{% endif %}
+</section>
+
+<section><h2>账户余额变动</h2>
+<div class="scroll"><table>
+<tr><th>账户</th><th class="n">期初</th><th class="n">收入</th><th class="n">支出</th><th class="n">期末</th><th class="n">最低</th><th>核对情况（天数）</th></tr>
+{% for x in v.accounts %}<tr><td>{{ x.name }} <span class="muted small">{{ x.collection }}</span></td>
+<td class="n">{{ x.opening|yuan }}</td><td class="n">{{ x.inflow|yuan }}</td><td class="n">{{ x.outflow|yuan }}</td><td class="n"><b>{{ x.closing|yuan }}</b></td>
+<td class="n">{{ x.min|yuan }}</td><td class="small">{% for s, n in x.status_days.items() %}{{ s }} {{ n }}{% if not loop.last %}，{% endif %}{% endfor %}</td></tr>{% endfor %}
+</table></div></section>
+
+<section><h2>资金去向</h2>
+<table>{% for code, amount in a.movements.items() %}<tr><td>{{ a.movements_cn[code] }}</td><td class="n">{{ money(amount) }}</td></tr>{% endfor %}</table>
+{% if a.withdrawals %}<h3>中天提现（按发起人）</h3>
+<table><tr><th>发起人</th><th class="n">笔数</th><th class="n">金额</th><th class="n">已找到入账</th><th>用途</th></tr>
+{% for w in a.withdrawals %}<tr><td>{{ w.initiator }}</td><td class="n">{{ w.count }}</td><td class="n">{{ w.amount|yuan }}</td><td class="n">{{ w.landed|yuan }}</td><td class="small">{{ w.mapped or '待确认' }}</td></tr>{% endfor %}
+</table>{% endif %}
+<p class="small muted">本期自动剔除日记账与银行重复登记 {{ a.duplicates }} 笔，匹配划转/充值 {{ a.transfers }} 笔。</p>
+</section>
+
+<section><h2>当前待处理事项（截至 {{ v.end }}）</h2>{{ items_list(v['items']) }}</section>
+{% endblock %}

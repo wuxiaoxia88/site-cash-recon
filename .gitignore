@@ -17,11 +17,11 @@ secrets.env
 *.db-*
 *.sqlite
 *.sqlite-*
-reports/
-logs/
-backups/
-data/
-private/
+/reports/
+/logs/
+/backups/
+/data/
+/private/
 
 # OS / editors
 .DS_Store
