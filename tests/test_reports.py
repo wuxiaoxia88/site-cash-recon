@@ -59,6 +59,14 @@ def test_daily_report(month):
     assert "经营盈利" in data["headline"]
 
 
+def test_rendering_is_deterministic(month):
+    settings, store = month
+    first = render_report(store, settings, "daily", date(2026, 9, 30)).content_hash
+    assert render_report(store, settings, "daily", date(2026, 9, 30)).content_hash == first
+    weekly = render_report(store, settings, "weekly", date(2026, 9, 16)).content_hash
+    assert render_report(store, settings, "weekly", date(2026, 9, 16)).content_hash == weekly
+
+
 def test_loss_day_is_urgent(month):
     settings, store = month
     art = render_report(store, settings, "daily", date(2026, 9, 29))  # i=28 -> loss day

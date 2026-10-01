@@ -70,6 +70,31 @@ def test_kb_publish_verifies_readback(paths):
     assert tampered.publish(cadence="daily", period_key="x", title="t", summary="s", html="a")["status"] == "published"
 
 
+class SlowKb(FakeKb):
+    """Accepts the publish but times out before answering, like a slow commit."""
+
+    def __call__(self, request, timeout):
+        response = super().__call__(request, timeout)
+        if request.full_url.endswith("/api/agent/publish-package"):
+            raise TimeoutError()
+        return response
+
+
+def test_kb_timeout_is_resolved_by_readback_without_resending(paths):
+    settings = kb_settings(paths)
+    settings.delivery["kb"]["base_urls"] = ["http://kb.test", "http://kb-public.test"]
+    fake = SlowKb()
+    receipt = KbPublisher(settings, opener=fake, sleep=lambda s: None).publish(
+        cadence="daily", period_key="d", title="t", summary="s", html="<p>x</p>")
+    assert receipt["status"] == "verified" and receipt["stage"] == "timeout"
+    posts = [u for m, u in fake.calls if m == "POST"]
+    assert posts == ["http://kb.test/api/agent/publish-package"]  # not re-sent to the second URL
+    again = KbPublisher(settings, opener=fake, sleep=lambda s: None).publish(
+        cadence="daily", period_key="d", title="t", summary="s", html="<p>x</p>")
+    assert again["stage"] == "already_published"
+    assert len([u for m, u in fake.calls if m == "POST"]) == 1
+
+
 def test_mail_agently_and_errors(paths, tmp_path):
     seen = {}
 

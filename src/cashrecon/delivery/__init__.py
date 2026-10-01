@@ -83,7 +83,9 @@ def mail_content(artifact: ReportArtifact, settings: Settings, link: str | None)
 
 
 def deliver(store: Store, settings: Settings, artifact: ReportArtifact, *, dry_run: bool = False,
-            force: bool = False, channels: list[str] | None = None) -> list[DeliveryResult]:
+            force: bool = False, channels: list[str] | None = None,
+            ignore_disabled: bool = False) -> list[DeliveryResult]:
+    """``ignore_disabled`` sends once even if the channel is disabled in config (manual test sends)."""
     key = artifact.report_key
     results: list[DeliveryResult] = []
     html = artifact.html_path.read_text(encoding="utf-8")
@@ -94,7 +96,7 @@ def deliver(store: Store, settings: Settings, artifact: ReportArtifact, *, dry_r
 
     # ------------------------------------------------------------------ KB
     if channels is None or "kb" in channels:
-        if not kb_cfg.get("enabled") and not dry_run:
+        if not kb_cfg.get("enabled") and not dry_run and not ignore_disabled:
             results.append(DeliveryResult("kb", "disabled"))
         else:
             row = _ledger(store, key, "kb")
@@ -120,7 +122,7 @@ def deliver(store: Store, settings: Settings, artifact: ReportArtifact, *, dry_r
                     results.append(DeliveryResult("kb", "failed", str(exc)))
     # ---------------------------------------------------------------- mail
     if channels is None or "mail" in channels:
-        if not mail_cfg.get("enabled") and not dry_run:
+        if not mail_cfg.get("enabled") and not dry_run and not ignore_disabled:
             results.append(DeliveryResult("mail", "disabled"))
         else:
             row = _ledger(store, key, "mail")

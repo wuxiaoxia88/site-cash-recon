@@ -17,8 +17,15 @@ from cashrecon.logging_setup import get_logger
 log = get_logger("kb")
 
 
+PUBLISH_TIMEOUT = 180
+
+
 class KbError(RuntimeError):
     pass
+
+
+class KbTimeout(KbError):
+    """The request was sent but no response arrived in time (outcome unknown)."""
 
 
 class KbPublisher:
@@ -44,16 +51,23 @@ class KbPublisher:
     def destination(self, cadence: str, period_key: str) -> str:
         return f"{self.prefix}/{self.slug}/{cadence}/{period_key}"
 
-    def _call(self, base: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, Any]:
+    def _call(self, base: str, path: str, payload: dict[str, Any] | None = None,
+              timeout: float = 60) -> tuple[int, Any]:
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(base + path, data=data, method="POST" if data else "GET", headers={
             "Authorization": f"Bearer {self.token}", "X-Agent-Name": self.agent, "Content-Type": "application/json"})
         try:
-            with self.opener(request, timeout=60) as response:
+            with self.opener(request, timeout=timeout) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             return exc.code, None
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        except TimeoutError:
+            raise KbTimeout("timeout") from None
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise KbTimeout("timeout") from None
+            raise KbError(f"network:{exc.reason.__class__.__name__}") from None
+        except (OSError, ValueError) as exc:
             raise KbError(f"network:{exc.__class__.__name__}") from None
 
     def publish(self, *, cadence: str, period_key: str, title: str, summary: str, html: str,
@@ -69,10 +83,19 @@ class KbPublisher:
         last_error = "kb_unreachable"
         for base in self.base_urls:
             try:
-                status, body = self._call(base, "/api/agent/publish-package", payload)
+                if self._verify(base, destination, html, attempts=1):
+                    return {"status": "verified", "job_id": "", "stage": "already_published",
+                            "share_url": self._share_url(destination), "destination": destination, "base": base}
+                status, body = self._call(base, "/api/agent/publish-package", payload, timeout=PUBLISH_TIMEOUT)
+            except KbTimeout:
+                # The request reached the server; it may still be processing. Never re-send to another
+                # base URL — decide the outcome by reading the content back.
+                verified = self._verify(base, destination, html, attempts=10)
+                return {"status": "verified" if verified else "unknown", "job_id": "", "stage": "timeout",
+                        "share_url": self._share_url(destination), "destination": destination, "base": base}
             except KbError as exc:
                 last_error = str(exc)
-                continue  # nothing was accepted; the next base URL is safe to try
+                continue  # could not connect: nothing was sent, the next base URL is safe to try
             if status >= 300 or not isinstance(body, dict) or body.get("ok") is not True:
                 raise KbError(f"publish_rejected:{status}")
             job = (body.get("data") or {})
@@ -99,16 +122,21 @@ class KbPublisher:
             self.sleep(self.poll_seconds)
         return stage
 
-    def _verify(self, base: str, destination: str, html: str) -> bool:
+    def _verify(self, base: str, destination: str, html: str, attempts: int = 5) -> bool:
         expected = hashlib.sha256(html.encode("utf-8")).hexdigest()
         path = destination + "/index.html"
-        for _ in range(5):  # indexing can lag behind "published"
-            status, body = self._call(base, "/api/agent/content?" + urllib.parse.urlencode({"path": path}))
+        for attempt in range(attempts):  # indexing can lag behind "published"
+            try:
+                status, body = self._call(base, "/api/agent/content?" + urllib.parse.urlencode({"path": path}))
+            except KbError:
+                status, body = 0, None
             data = body.get("data") if isinstance(body, dict) else None
             content = (data or {}).get("content")
             if status == 200 and isinstance(content, str):
                 if hashlib.sha256(content.encode("utf-8")).hexdigest() == expected:
                     return True
-                log.warning("kb read-back differs for %s", destination)
-            self.sleep(self.poll_seconds)
+                if attempts > 1:
+                    log.warning("kb read-back differs for %s", destination)
+            if attempt + 1 < attempts:
+                self.sleep(self.poll_seconds)
         return False

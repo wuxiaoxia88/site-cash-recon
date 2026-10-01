@@ -10,7 +10,7 @@ from typing import Any
 from cashrecon import dates
 from cashrecon.analysis import ActionItem, action_items, analysis, headline, load_history
 from cashrecon.config import Settings
-from cashrecon.db import Store, now_text
+from cashrecon.db import Store
 from cashrecon.engine import categories
 from cashrecon.reports import charts
 
@@ -54,7 +54,7 @@ def daily_view(store: Store, settings: Settings, day: date) -> dict[str, Any]:
         "site": settings.site_name,
         "period_label": f"{payload['day']}（{payload['weekday']}）",
         "period_key": payload["day"],
-        "generated_at": now_text(),
+        "generated_at": payload["generated_at"],  # data computation time: same data => identical report
         "p": payload,
         "headline": headline(payload, items),
         "items": [i.to_dict() for i in items],
@@ -165,7 +165,7 @@ def period_view(store: Store, settings: Settings, cadence: str, start: date, end
         "site": settings.site_name,
         "period_label": label,
         "period_key": period_key,
-        "generated_at": now_text(),
+        "generated_at": max(p["generated_at"] for p in present),
         "start": start.isoformat(), "end": end.isoformat(),
         "days_total": len(all_days),
         "days_present": len(present),

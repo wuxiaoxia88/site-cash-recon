@@ -63,7 +63,7 @@ def cmd_deliver(args: argparse.Namespace) -> int:
     with context(args) as (settings, store):
         artifact = render_report(store, settings, args.cadence, dates.parse_day(args.date) if args.date else None)
         results = deliver(store, settings, artifact, dry_run=args.dry_run, force=args.force,
-                          channels=args.channel or None)
+                          channels=args.channel or None, ignore_disabled=args.once)
     for r in results:
         print(f"{r.channel}: {r.status} {r.detail} {r.receipt}")
     return 1 if any(r.status == "failed" for r in results) else 0
@@ -126,6 +126,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--channel", action="append", choices=("kb", "mail"))
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force", action="store_true", help="忽略投递台账强制重发（慎用）")
+    p.add_argument("--once", action="store_true", help="本次忽略配置中的投递开关（用于人工试发，不影响定时任务）")
     p.set_defaults(func=cmd_deliver)
 
     p = sub.add_parser("web", help="启动本地网页控制台")

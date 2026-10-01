@@ -57,7 +57,7 @@ footer{color:var(--muted);font-size:12px;padding:8px 4px 24px}
   <h1>{{ v.title }} · {{ v.site }}</h1>
   <div class="sub">{{ v.period_label }}
     {% if v.p is defined %}<span class="badge {{ v.p.data_status }}">数据{{ {"OK":"完整","PARTIAL":"部分不完整","MISSING":"有缺失"}[v.p.data_status] }}</span>{% endif %}
-    · 生成于 {{ v.generated_at }}</div>
+    · 数据计算于 {{ v.generated_at }}</div>
 </header>
 <div class="headline">{{ v.headline }}</div>
 {% block body %}{% endblock %}
