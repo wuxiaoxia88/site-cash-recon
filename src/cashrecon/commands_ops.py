@@ -76,6 +76,31 @@ def cmd_web(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_schedule(args: argparse.Namespace) -> int:
+    from cashrecon import scheduler
+    from cashrecon.config import load_settings
+    from cashrecon.paths import Paths
+    settings = load_settings(Paths.resolve(args.home))
+    if args.action == "install":
+        for line in scheduler.install(settings, with_console=args.with_console):
+            print("已注册", line)
+    elif args.action == "uninstall":
+        print("已移除：", "、".join(scheduler.uninstall(settings)) or "无")
+    else:
+        for line in scheduler.status(settings):
+            print(line)
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    from cashrecon.commands import context
+    from cashrecon.pipeline import backup
+    with context(args) as (settings, store):
+        backup(store, settings)
+        print(f"备份目录：{settings.paths.backups}")
+    return 0
+
+
 def register(sub: argparse._SubParsersAction) -> None:
     from cashrecon.commands import add_range
     p = sub.add_parser("recon", help="重算对账与日结果")
@@ -108,3 +133,11 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--port", type=int)
     p.add_argument("--open", action="store_true", help="启动后打开浏览器")
     p.set_defaults(func=cmd_web)
+
+    p = sub.add_parser("schedule", help="注册/移除/查看定时任务（macOS launchd / Windows 任务计划）")
+    p.add_argument("action", choices=("install", "uninstall", "status"))
+    p.add_argument("--with-console", action="store_true", help="同时让网页控制台开机常驻")
+    p.set_defaults(func=cmd_schedule)
+
+    p = sub.add_parser("backup", help="立即备份数据库")
+    p.set_defaults(func=cmd_backup)
