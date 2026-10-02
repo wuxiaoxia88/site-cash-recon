@@ -19,7 +19,7 @@ from cashrecon.money import fmt_yuan, to_cents
 
 LEVEL_ORDER = {"high": 0, "medium": 1, "low": 2}
 LEVEL_CN = {"high": "紧急", "medium": "重要", "low": "提示"}
-KIND_ORDER = {"source_missing": 0, "loss": 1, "balance_diff": 2, "low_balance": 3, "withdraw_unknown": 4,
+KIND_ORDER = {"source_missing": 0, "loss": 1, "balance_diff": 2, "low_balance": 3, "bill_loss": 4, "withdraw_unknown": 4,
               "topup_unmatched": 5, "journal_unmatched": 6, "unmapped_account": 7}
 
 
@@ -39,6 +39,15 @@ class ActionItem:
         data = asdict(self)
         data["level_cn"] = LEVEL_CN[self.level]
         return data
+
+
+def month_to_date(payload: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, Any]:
+    """Operating (business-period) totals from the 1st of the month up to this payload's day."""
+    month = payload["day"][:7]
+    days = [p for p in history if p["day"][:7] == month and p["day"] < payload["day"]] + [payload]
+    income = sum(p["profit"]["income"] for p in days)
+    cost = sum(p["profit"]["cost"] for p in days)
+    return {"income": income, "cost": cost, "profit": income - cost, "days": len(days)}
 
 
 def load_history(store: Store, day: date, days: int = 35) -> list[dict[str, Any]]:
@@ -70,23 +79,31 @@ def action_items(payload: dict[str, Any], settings: Settings, history: list[dict
             items.append(ActionItem("low", "source_partial", f"数据可能不完整：{src['name']}",
                                     detail=src.get("anomaly") or src["note"], key=f"partial:{src['code']}",
                                     action="上游采集完成后重跑当日（18:00 补跑会自动处理）"))
-    # loss
+    # loss: (a) bill-basis daily streak, (b) month-to-date operating loss once payroll is registered
     profit = payload["profit"]
-    if alerts.get("loss", True) and profit["complete"] and profit["profit"] < 0:
-        streak = 1
-        for past in reversed(history):
-            if past["profit"]["complete"] and past["profit"]["profit"] < 0:
+    if alerts.get("loss", True):
+        streak_days = int(alerts.get("loss_streak_days", 3))
+        bills = [p.get("bill_profit") for p in history + [payload]]
+        streak = 0
+        for bill in reversed(bills):
+            if bill and bill.get("profit_cents") is not None and bill["profit_cents"] < 0:
                 streak += 1
             else:
                 break
-        worst = sorted((x for x in profit["lines"] if x["kind"] == "cost"), key=lambda x: x["total"])[:2]
-        drivers = "、".join(f"{x['name']} {fmt_yuan(-x['total'])}" for x in worst)
-        title = f"当日经营亏损 {fmt_yuan(-profit['profit'])} 元"
-        if streak >= int(alerts.get("loss_streak_days", 3)):
-            title = f"已连续 {streak} 天经营亏损（今日 {fmt_yuan(-profit['profit'])} 元）"
-        items.append(ActionItem("high", "loss", title, detail=f"最大成本：{drivers}" if drivers else "",
-                                amount=profit["profit"], key="loss",
-                                action="对照利润表核实大额成本是否合理、收入是否漏记"))
+        if streak >= streak_days:
+            items.append(ActionItem(
+                "medium", "bill_loss", f"账单口径已连续 {streak} 天亏损",
+                detail=f"今日账单口径利润 {fmt_yuan(bills[-1]['profit_cents'])} 元（进港/出港/返利账单，"
+                       f"未含线下工资房租等）", amount=bills[-1]["profit_cents"], key="bill_loss",
+                action="查看进港派费收入与出港账单费用的变化，确认是否有异常扣费或单价变化"))
+        mtd = month_to_date(payload, history)
+        check_day = int(alerts.get("mtd_loss_from_day", 25))
+        if mtd["profit"] < 0 and date.fromisoformat(day).day >= check_day:
+            items.append(ActionItem(
+                "high", "loss", f"本月至今经营亏损 {fmt_yuan(-mtd['profit'])} 元",
+                detail=f"本月 {mtd['days']} 天：收入 {fmt_yuan(mtd['income'])}，成本 {fmt_yuan(mtd['cost'])}",
+                amount=mtd["profit"], key="loss",
+                action="对照利润表核实大额成本是否合理、收入是否漏记；月结客户回款请登记业务发生时间"))
     # balances
     diff_floor = to_cents(alerts.get("balance_diff_yuan", 100))
     for acc in payload["accounts"]:
@@ -150,7 +167,13 @@ def action_items(payload: dict[str, Any], settings: Settings, history: list[dict
                                 action="在控制台为这些记录补充分类规则，利润会更准确"))
     # weekly manual balance check
     weekday = date.fromisoformat(day).weekday()
-    manual_accounts = [a for a in payload["accounts"] if a["collection"] == "人工登记"]
+    for acc in payload["accounts"]:
+        if acc["collection"] == "系统推算" and acc["closing"] is None:
+            items.append(ActionItem("low", "fund_anchor", f"请录入一次{acc['name']}的实际余额",
+                                    detail="系统按转入转出推算余额，需要一个起点", key=f"anchor:{acc['code']}",
+                                    action="在控制台“余额录入”选择该账户，填写当前余额和时间"))
+    manual_accounts = [a for a in payload["accounts"] if a["collection"] in ("人工登记", "系统推算")
+                       and a["closing"] is not None]
     stale = []
     for acc in manual_accounts:
         last = acc.get("last_manual_check")
@@ -164,16 +187,17 @@ def action_items(payload: dict[str, Any], settings: Settings, history: list[dict
     return items
 
 
-def headline(payload: dict[str, Any], items: list[ActionItem]) -> str:
+def headline(payload: dict[str, Any], items: list[ActionItem], history: list[dict[str, Any]] | None = None) -> str:
     profit = payload["profit"]
-    pos = payload["position"]["total"]
     parts = []
     if profit["complete"]:
-        word = "盈利" if profit["profit"] >= 0 else "亏损"
-        parts.append(f"经营{word} {fmt_yuan(abs(profit['profit']))} 元")
+        mtd = month_to_date(payload, history or [])
+        word = "盈利" if mtd["profit"] >= 0 else "亏损"
+        parts.append(f"本月至今经营{word} {fmt_yuan(abs(mtd['profit']))} 元")
+        parts.append(f"当日 {fmt_yuan(profit['profit'], sign=True)} 元")
     else:
         parts.append("中天数据缺失，利润不完整")
-    parts.append(f"现金头寸 {fmt_yuan(pos)} 元")
+    parts.append(f"现金头寸 {fmt_yuan(payload['position']['total'])} 元")
     urgent = sum(1 for i in items if i.level == "high")
     important = sum(1 for i in items if i.level == "medium")
     if urgent or important:
@@ -196,8 +220,10 @@ def analysis(payload: dict[str, Any], history: list[dict[str, Any]], settings: S
     recent = [h for h in history[-7:] if h["profit"]["complete"]]
     if profit["complete"]:
         avg = _avg([h["profit"]["profit"] for h in recent])
-        text = f"当日现金口径经营利润 {fmt_yuan(profit['profit'], sign=True)} 元（收入 {fmt_yuan(profit['income'])}，" \
-               f"成本 {fmt_yuan(profit['cost'])}）。"
+        mtd = month_to_date(payload, history)
+        text = f"本月至今经营利润 {fmt_yuan(mtd['profit'], sign=True)} 元（{mtd['days']} 天）。" \
+               f"当日按业务期间计经营利润 {fmt_yuan(profit['profit'], sign=True)} 元（收入 {fmt_yuan(profit['income'])}，" \
+               f"成本 {fmt_yuan(profit['cost'])}），按收付日计 {fmt_yuan(profit['cash']['profit'], sign=True)} 元。"
         if avg is not None:
             delta = profit["profit"] - avg
             text += f"近 7 日日均 {fmt_yuan(round(avg), sign=True)} 元，今日{'高' if delta >= 0 else '低'}于均值 " \
@@ -246,8 +272,15 @@ def analysis(payload: dict[str, Any], history: list[dict[str, Any]], settings: S
     withdrawals = payload["movements"].get("withdrawals_by_initiator") or []
     if withdrawals:
         total = sum(w["amount"] for w in withdrawals)
-        landed = sum(w["landed"] for w in withdrawals)
-        out.append({"title": "中天提现", "text": f"当日中天提现 {fmt_yuan(total)} 元，涉及 {len(withdrawals)} 个发起人，"
-                    f"已在本网点账户找到入账 {fmt_yuan(landed)} 元。提现若用于工资或承包区结算，属于经营成本，"
-                    "确认用途后利润会相应调整。"})
+        names = "、".join(f"{w.get('label') or w['initiator']} {fmt_yuan(w['amount'])}" for w in withdrawals[:5])
+        out.append({"title": "承包区/业务员提现", "text": f"当日通过中天预付款账户提现 {fmt_yuan(total)} 元，"
+                    f"计入人工成本：{names}。"})
+    deferred = profit.get("deferred") or []
+    if deferred:
+        out.append({"title": "计入其他期间的收付", "text": "；".join(
+            f"{d['account']}{'收' if d['amount'] > 0 else '付'} {fmt_yuan(abs(d['amount']))} 元（{d['text']}）计入 {d['period']}"
+            for d in deferred[:4]) + "。这些款项按业务发生期间计入利润，不影响当日。"})
+    if profit["complete"] and date.fromisoformat(payload["day"]).day < 25:
+        out.append({"title": "说明", "text": "直营员工工资、驿站派费通常在次月 20 日左右登记并计入本月，"
+                    "届时本月利润会相应下调；月结客户回款请在日记账登记业务发生时间，系统会计入对应月份。"})
     return out

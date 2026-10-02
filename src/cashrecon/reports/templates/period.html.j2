@@ -14,6 +14,7 @@
     <div class="hint">亏损 {{ v.loss_days|length }} 天 / 共 {{ v.days_present }} 天</div></div>
 </div>
 
+{% if v.note %}<section><p class="small">{{ v.note }}</p></section>{% endif %}
 {% if v.missing_days %}<section><h2>数据缺口</h2><p class="neg">以下日期没有日结果，本期合计不含这些天：{{ v.missing_days|join('、') }}</p></section>{% endif %}
 
 <section><h2>每日走势</h2>
@@ -26,7 +27,7 @@
 </table></div></details>
 </section>
 
-<section><h2>利润表（现金口径）</h2>
+<section><h2>利润表（按业务期间）</h2>
 <div class="scroll"><table>
 <tr><th>科目</th><th class="n">中天</th><th class="n">线下</th><th class="n">本期</th><th class="n">上期</th><th class="n">变化</th></tr>
 {% for kind, label in [("income","收入"),("cost","成本")] %}
@@ -38,6 +39,7 @@
 <tr class="total"><td>经营利润</td><td></td><td></td><td class="n">{{ money(a.profit) }}</td><td class="n">{{ (v.prev.profit if v.prev else none)|yuan }}</td><td class="n">{{ money(v.delta_profit) }}</td></tr>
 </table></div>
 {% if a.unclassified.count %}<p class="small muted">待分类 {{ a.unclassified.count }} 项（收 {{ a.unclassified['in']|yuan }}，付 {{ a.unclassified.out|yuan }}），未计入利润。</p>{% endif %}
+<p class="small">按收付日（现金口径）合计：{{ money(a.cash_profit) }} 元。差异来自工资、派费、月结款等跨期收付。</p>
 {% if a.bill %}<p class="small">账单口径对照（{{ a.bill.days }} 天）：收入 {{ a.bill.income_cents|yuan }}，支出 {{ a.bill.expense_cents|yuan }}，利润 {{ money(a.bill.profit_cents) }}。</p>{% endif %}
 </section>
 
@@ -51,9 +53,9 @@
 
 <section><h2>资金去向</h2>
 <table>{% for code, amount in a.movements.items() %}<tr><td>{{ a.movements_cn[code] }}</td><td class="n">{{ money(amount) }}</td></tr>{% endfor %}</table>
-{% if a.withdrawals %}<h3>中天提现（按发起人）</h3>
-<table><tr><th>发起人</th><th class="n">笔数</th><th class="n">金额</th><th class="n">已找到入账</th><th>用途</th></tr>
-{% for w in a.withdrawals %}<tr><td>{{ w.initiator }}</td><td class="n">{{ w.count }}</td><td class="n">{{ w.amount|yuan }}</td><td class="n">{{ w.landed|yuan }}</td><td class="small">{{ w.mapped or '待确认' }}</td></tr>{% endfor %}
+{% if a.withdrawals %}<h3>中天预付款提现（承包区/业务员劳务费）</h3>
+<table><tr><th>提现人</th><th class="n">笔数</th><th class="n">金额</th><th>计入</th></tr>
+{% for w in a.withdrawals %}<tr><td>{{ w.label or w.initiator }}</td><td class="n">{{ w.count }}</td><td class="n">{{ w.amount|yuan }}</td><td class="small">{{ w.mapped }}</td></tr>{% endfor %}
 </table>{% endif %}
 <p class="small muted">本期自动剔除日记账与银行重复登记 {{ a.duplicates }} 笔，匹配划转/充值 {{ a.transfers }} 笔。</p>
 </section>

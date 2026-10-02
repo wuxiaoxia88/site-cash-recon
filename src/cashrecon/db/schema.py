@@ -205,4 +205,15 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE flow_states ADD COLUMN kind TEXT NOT NULL DEFAULT '';
     """,
+    # 3 — business period (accrual), staff directory
+    """
+    ALTER TABLE flows ADD COLUMN period_start TEXT;
+    ALTER TABLE flows ADD COLUMN period_end TEXT;
+    ALTER TABLE flow_states ADD COLUMN p_start TEXT;
+    ALTER TABLE flow_states ADD COLUMN p_end TEXT;
+    ALTER TABLE flow_states ADD COLUMN period_basis TEXT NOT NULL DEFAULT '';
+    ALTER TABLE manual_decisions ADD COLUMN period_start TEXT;
+    ALTER TABLE manual_decisions ADD COLUMN period_end TEXT;
+    CREATE TABLE staff (code TEXT PRIMARY KEY, name TEXT NOT NULL, updated_at TEXT NOT NULL);
+    """,
 ]

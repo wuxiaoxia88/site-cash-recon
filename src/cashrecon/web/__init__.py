@@ -40,20 +40,20 @@ from cashrecon.paths import Paths
 
 log = get_logger("web")
 DECISIONS = {"ignore": "忽略（不计入）", "normal": "确认为正常收支", "duplicate": "与另一笔重复",
-             "transfer": "与另一笔为内部划转", "category": "只修改科目"}
+             "transfer": "与另一笔为内部划转", "category": "只修改科目", "period": "只设置业务期间"}
 _job_lock = threading.Lock()
 _job_state: dict[str, Any] = {"running": False, "last": None}
 
 
 def recompute(store: Store, settings: Settings, days: list[date], render: bool = True) -> None:
-    from cashrecon.engine import reconcile
+    from cashrecon.engine import reconcile_full
     from cashrecon.reports import render_report
     days = sorted(set(days))
     if not days:
         return
-    reconcile(store, settings, days)
+    _, refreshed = reconcile_full(store, settings, days)
     if render:
-        for day in days:
+        for day in days + refreshed:
             try:
                 render_report(store, settings, "daily", day)
             except Exception:  # report rendering must not break the console action
@@ -137,7 +137,7 @@ def create_app(paths: Paths | None = None) -> Flask:
         items = [i.to_dict() for i in actions]
         series = history + [payload]
         labels = [p["day"][5:] for p in series]
-        return render_template("dashboard.html", p=payload, items=items, headline=headline(payload, actions),
+        return render_template("dashboard.html", p=payload, items=items, headline=headline(payload, actions, history),
             chart_profit=charts.bar_chart(labels, [p["profit"]["profit"] for p in series]),
             chart_position=charts.line_chart(labels, [p["position"]["total"] for p in series]),
             month_profit=sum(p["profit"]["profit"] for p in series if p["day"][:7] == payload["day"][:7]))
@@ -193,6 +193,18 @@ def create_app(paths: Paths | None = None) -> Flask:
         category = request.form.get("category") or None
         target = (request.form.get("target_flow_id") or "").strip() or None
         note = (request.form.get("note") or "").strip()[:200]
+        p_start = (request.form.get("period_start") or "").strip() or None
+        p_end = (request.form.get("period_end") or "").strip() or p_start
+        try:
+            if p_start:
+                date.fromisoformat(p_start)
+                date.fromisoformat(p_end)
+        except ValueError:
+            flash("业务期间日期格式不正确")
+            return redirect(request.referrer or url_for("review"))
+        if decision == "period" and not p_start:
+            flash("请填写业务期间（开始、结束日期）")
+            return redirect(request.referrer or url_for("review"))
         if not ids or decision not in DECISIONS:
             flash("请选择记录和处理方式")
             return redirect(request.referrer or url_for("review"))
@@ -213,11 +225,12 @@ def create_app(paths: Paths | None = None) -> Flask:
                     continue
                 days.add(date.fromisoformat(row["biz_date"]))
                 db.execute("INSERT INTO manual_decisions (flow_id, decision, target_flow_id, category, note, actor, "
-                           "created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(flow_id) DO UPDATE SET "
-                           "decision=excluded.decision, target_flow_id=excluded.target_flow_id, "
+                           "created_at, period_start, period_end) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(flow_id) "
+                           "DO UPDATE SET decision=excluded.decision, target_flow_id=excluded.target_flow_id, "
                            "category=excluded.category, note=excluded.note, actor=excluded.actor, "
-                           "created_at=excluded.created_at",
-                           (fid, decision, target, category, note, "console", now_text()))
+                           "created_at=excluded.created_at, period_start=excluded.period_start, "
+                           "period_end=excluded.period_end",
+                           (fid, decision, target, category, note, "console", now_text(), p_start, p_end))
         recompute(db, settings(), _with_neighbours(days))
         flash(f"已处理 {len(ids)} 笔并重新计算")
         return redirect(request.referrer or url_for("review"))
@@ -260,7 +273,7 @@ def create_app(paths: Paths | None = None) -> Flask:
         db = store()
         day = request.args.get("date") or db.scalar("SELECT MAX(biz_date) FROM daily_results") or dates.today().isoformat()
         account = request.args.get("account", "")
-        sql = ("SELECT f.*, s.state, s.category, s.reason, a.name AS account_name FROM flows f "
+        sql = ("SELECT f.*, s.state, s.category, s.reason, s.p_start, s.p_end, a.name AS account_name FROM flows f "
                "LEFT JOIN flow_states s USING (flow_id) LEFT JOIN accounts a USING (account_code) "
                "WHERE f.biz_date = ? AND f.removed = 0")
         params: list[Any] = [day]

@@ -19,7 +19,7 @@ from cashrecon.zto import ZtoError
 log = get_logger("ingest")
 
 _FLOW_FIELDS = ("account_code", "biz_time", "direction", "amount_cents", "balance_after_cents", "counterparty",
-                "src_category", "summary", "initiator", "status_text")
+                "src_category", "summary", "initiator", "status_text", "period_start", "period_end")
 
 
 def flow_hash(flow: FlowRecord) -> str:
@@ -28,8 +28,8 @@ def flow_hash(flow: FlowRecord) -> str:
     return hashlib.sha1(dumps(payload).encode("utf-8")).hexdigest()
 
 
-def ingest(store: Store, batch: SourceBatch) -> tuple[int, int]:
-    """Upsert a batch. Returns ``(row_count, changed_count)``."""
+def ingest(store: Store, batch: SourceBatch, changed_ids: list[str] | None = None) -> tuple[int, int]:
+    """Upsert a batch. Returns ``(row_count, changed_count)``; changed flow ids go to ``changed_ids``."""
     now = now_text()
     day = batch.day.isoformat()
     changed = 0
@@ -39,22 +39,26 @@ def ingest(store: Store, batch: SourceBatch) -> tuple[int, int]:
             row = store.one("SELECT raw_hash, removed FROM flows WHERE flow_id = ?", (flow.flow_id,))
             values = (flow.account_code, flow.biz_date, flow.biz_time, flow.direction, flow.amount_cents,
                       flow.balance_after_cents, flow.counterparty, flow.src_category, flow.summary,
-                      flow.initiator, flow.status_text, dumps(flow.raw), digest)
+                      flow.initiator, flow.status_text, dumps(flow.raw), digest, flow.period_start, flow.period_end)
             if row is None:
                 store.execute(
                     "INSERT INTO flows (account_code, biz_date, biz_time, direction, amount_cents, "
                     "balance_after_cents, counterparty, src_category, summary, initiator, status_text, raw_json, "
-                    "raw_hash, flow_id, source, source_ref, first_seen, last_seen) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "raw_hash, period_start, period_end, flow_id, source, source_ref, first_seen, last_seen) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (*values, flow.flow_id, flow.source, flow.source_ref, now, now))
                 changed += 1
+                if changed_ids is not None:
+                    changed_ids.append(flow.flow_id)
             elif row["raw_hash"] != digest or row["removed"]:
                 store.execute(
                     "UPDATE flows SET account_code=?, biz_date=?, biz_time=?, direction=?, amount_cents=?, "
                     "balance_after_cents=?, counterparty=?, src_category=?, summary=?, initiator=?, status_text=?, "
-                    "raw_json=?, raw_hash=?, last_seen=?, removed=0 WHERE flow_id=?",
+                    "raw_json=?, raw_hash=?, period_start=?, period_end=?, last_seen=?, removed=0 WHERE flow_id=?",
                     (*values, now, flow.flow_id))
                 changed += 1
+                if changed_ids is not None:
+                    changed_ids.append(flow.flow_id)
             else:
                 store.execute("UPDATE flows SET last_seen=? WHERE flow_id=?", (now, flow.flow_id))
         if batch.complete:
@@ -102,6 +106,7 @@ class FetchResult:
     error: str = ""
     route: str = ""
     notes: list[str] = field(default_factory=list)
+    changed_ids: list[str] = field(default_factory=list)
 
 
 def _safe_error(exc: BaseException) -> str:
@@ -131,10 +136,11 @@ def fetch_days(settings: Settings, store: Store, days: Iterable[date], *, only: 
             t0 = time.monotonic()
             try:
                 batch = source.fetch(day)
-                rows, changed = ingest(store, batch)
+                changed_ids: list[str] = []
+                rows, changed = ingest(store, batch, changed_ids)
                 status = "ok" if rows else "empty"
                 result = FetchResult(code, day.isoformat(), status, rows, changed, route=batch.route,
-                                     notes=batch.notes)
+                                     notes=batch.notes, changed_ids=changed_ids)
                 if not batch.complete:
                     result.notes.append("数据可能不完整")
             except Exception as exc:  # one failing source must not stop the others

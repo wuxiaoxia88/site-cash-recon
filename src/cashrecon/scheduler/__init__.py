@@ -24,7 +24,7 @@ from cashrecon.paths import IS_MAC, IS_WINDOWS
 
 LABEL_PREFIX = "com.sitecashrecon"
 TASK_FOLDER = "SiteCashRecon"
-JOBS = ("daily", "retry", "weekly", "monthly")
+JOBS = ("daily", "retry", "weekly", "monthly", "monthly_final")
 WEEKDAYS = {"MON": 1, "TUE": 2, "WED": 3, "THU": 4, "FRI": 5, "SAT": 6, "SUN": 0}
 WIN_DAYS = {0: "Sunday", 1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday", 5: "Friday", 6: "Saturday"}
 
@@ -53,7 +53,7 @@ def parse_slot(job: str, text: str) -> Slot:
         if len(parts) != 2 or parts[0].upper() not in WEEKDAYS:
             raise ScheduleError("weekly 格式应为 'MON 12:20'")
         return Slot(hour, minute, weekday=WEEKDAYS[parts[0].upper()])
-    if job == "monthly":
+    if job in ("monthly", "monthly_final"):
         if len(parts) != 2 or not parts[0].isdigit() or not 1 <= int(parts[0]) <= 28:
             raise ScheduleError("monthly 格式应为 '3 12:30'（日期 1–28）")
         return Slot(hour, minute, day=int(parts[0]))

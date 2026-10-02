@@ -73,7 +73,7 @@ def period_for(cadence: str, ref: date | None) -> tuple[date, date]:
         return start, start + timedelta(days=6)
     if ref is None:
         return dates.previous_month()
-    return dates.month_of(ref)
+    return dates.month_of(ref)  # monthly and monthly_final
 
 
 def _monthly_csv(view: dict[str, Any]) -> str:
@@ -103,7 +103,7 @@ def render_report(store: Store, settings: Settings, cadence: str, ref: date | No
     atomic_write(html_path, html)
     atomic_write(json_path, json.dumps(view, ensure_ascii=False, indent=1, default=str))
     csv_path = None
-    if cadence == "monthly":
+    if cadence in ("monthly", "monthly_final"):
         csv_path = folder / f"{stem}.csv"
         atomic_write(csv_path, _monthly_csv(view))
     digest = hashlib.sha256(html.encode("utf-8")).hexdigest()

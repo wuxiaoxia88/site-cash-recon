@@ -56,7 +56,7 @@ def test_daily_report(month):
     data = json.loads(art.json_path.read_text(encoding="utf-8"))
     assert data["p"]["profit"]["profit"] == 2_290_000 - 1_800_000 + 50_000 - 20_000
     assert data["delta"]["profit"] is not None
-    assert "经营盈利" in data["headline"]
+    assert "本月至今经营盈利" in data["headline"]
 
 
 def test_rendering_is_deterministic(month):
@@ -67,12 +67,31 @@ def test_rendering_is_deterministic(month):
     assert render_report(store, settings, "weekly", date(2026, 9, 16)).content_hash == weekly
 
 
-def test_loss_day_is_urgent(month):
+def test_loss_alerts(month):
     settings, store = month
-    art = render_report(store, settings, "daily", date(2026, 9, 29))  # i=28 -> loss day
-    kinds = [(i["level"], i["kind"]) for i in art.view["items"]]
-    assert ("high", "loss") in kinds
-    assert "亏损" in art.view["headline"]
+    from cashrecon.engine import reconcile_full
+    # bill-basis loss on three consecutive days -> medium
+    for day in ("2026-09-27", "2026-09-28", "2026-09-29"):
+        store.execute("INSERT INTO bill_profit (biz_date, component, amount_cents, status, captured_at) "
+                      "VALUES (?, 'outbound_fee', 500000, 'ok', 'x')", (day,))
+    reconcile_full(store, settings, [date(2026, 9, 27), date(2026, 9, 28), date(2026, 9, 29)],
+                   today=date(2026, 10, 1))
+    kinds = [(i["level"], i["kind"]) for i in render_report(store, settings, "daily", date(2026, 9, 29)).view["items"]]
+    assert ("medium", "bill_loss") in kinds and ("high", "loss") not in kinds
+    # a large cost makes the month-to-date result negative -> urgent from the 25th on
+    ingest(store, SourceBatch("TEST", date(2026, 9, 2), complete=False, flows=[
+        FlowRecord("JOURNAL", "big", "STAFF_WECHAT", "2026-09-02 10:00:00", "OUT", 900_000_000,
+                   src_category="场地租金")]))
+    reconcile_full(store, settings, [date(2026, 9, 2)], today=date(2026, 10, 1))
+    art = render_report(store, settings, "daily", date(2026, 9, 29))
+    assert ("high", "loss") in [(i["level"], i["kind"]) for i in art.view["items"]]
+    assert "本月至今经营亏损" in art.view["headline"]
+    early = render_report(store, settings, "daily", date(2026, 9, 10))
+    assert ("high", "loss") not in [(i["level"], i["kind"]) for i in early.view["items"]]
+    month_view = render_report(store, settings, "monthly", date(2026, 9, 1)).view
+    assert month_view["items"][0]["kind"] == "month_loss" and "初版" in month_view["note"]
+    final = render_report(store, settings, "monthly_final", date(2026, 9, 1))
+    assert final.title == "网点资金月报（定稿）" and final.report_key == "monthly_final:2026-09"
 
 
 def test_weekly_and_monthly(month):

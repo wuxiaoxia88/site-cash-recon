@@ -28,6 +28,8 @@ class FlowRecord:
     initiator: str = ""
     status_text: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+    period_start: str | None = None  # business period (业务发生期间) when the source provides one
+    period_end: str | None = None
 
     @property
     def biz_date(self) -> str:

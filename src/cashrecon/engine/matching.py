@@ -1,15 +1,20 @@
 """Classification and cross-source matching.
 
-Re-derives ``flow_states`` and automatic ``links`` for all active flows from
-facts + rules + manual decisions (a pure recomputation; safe to run any time).
+Re-derives ``flow_states``, automatic ``links`` and derived (virtual-account) flows
+for all active flows from facts + rules + manual decisions. It is a pure
+recomputation and safe to run any time.
 
 States
   NORMAL      counted in totals under its category
   DUPLICATE   journal entry that duplicates an auto-collected record (excluded)
-  TRANSFER    one side of a matched internal transfer / ZT top-up / withdrawal
-  PENDING     transfer/withdrawal still inside its matching window (not yet overdue)
+  TRANSFER    one side of a matched internal transfer / ZT top-up / withdrawal / fund sweep
+  PENDING     transfer still inside its matching window (not yet overdue)
   REVIEW      needs a human decision (reason given); excluded from P&L when doubtful
   IGNORED     excluded by a manual decision or a non-effective portal status
+
+Business period (业务期间) per flow, in priority order:
+  manual decision > journal 业务发生时间 (when it differs from the entry date) >
+  the duplicate journal entry's explicit period > payroll rule (previous month) > cash date.
 """
 
 from __future__ import annotations
@@ -17,10 +22,10 @@ from __future__ import annotations
 import hashlib
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from cashrecon.config import Settings
-from cashrecon.db import Store
+from cashrecon.db import Store, dumps, now_text
 from cashrecon.engine import categories
 from cashrecon.engine.rules import Classifier
 from cashrecon.money import to_cents
@@ -28,6 +33,11 @@ from cashrecon.money import to_cents
 XFER = {"XFER_INTERNAL", "XFER_ZT_TOPUP", "XFER_ZT_WITHDRAW"}
 INEFFECTIVE_STATUS = ("草稿", "审核驳回", "已作废", "作废")
 AUTO_SOURCES = {"BANK_SMS", "ICBC", "ALIPAY", "ZT_FLOW"}
+WITHDRAW_TYPES = ("线下提现", "中天余额提现")
+# Auto-collected categories that a more specific journal category may replace.
+INHERITABLE = {"UNCLASSIFIED", "INC_OTHER", "COST_OTHER", "XFER_ZT_TOPUP"}
+PERIOD_BASIS_CN = {"manual": "人工指定", "journal": "日记账业务发生时间", "journal_dup": "对应日记账业务发生时间",
+                   "payroll": "月度工资/派费按上月计", "cash": "按收付日"}
 
 
 @dataclass
@@ -44,6 +54,8 @@ class EFlow:
     summary: str
     initiator: str
     status_text: str
+    period_start: date | None = None
+    period_end: date | None = None
     category: str = "UNCLASSIFIED"
     state: str = "NORMAL"
     reason: str = ""
@@ -51,12 +63,22 @@ class EFlow:
     link_id: str | None = None   # transfer / top-up / withdrawal pairing
     dup_link: str | None = None  # this auto record is the primary of a journal duplicate
     locked: bool = False  # decided manually
+    p_start: date | None = None
+    p_end: date | None = None
+    period_basis: str = "cash"
+    manual_period: tuple[date, date] | None = None
+    dup_period: tuple[date, date] | None = None
+
+    @property
+    def signed(self) -> int:
+        return self.amount if self.direction == "IN" else -self.amount
 
 
 @dataclass
 class MatchResult:
     flows: dict[str, EFlow]
     links: list[dict] = field(default_factory=list)
+    derived: list[EFlow] = field(default_factory=list)
 
 
 def _parse_time(text: str) -> datetime:
@@ -76,14 +98,28 @@ def _link_id(kind: str, a: str, b: str | None) -> str:
     return kind + ":" + hashlib.sha1(f"{a}|{b}".encode()).hexdigest()[:16]
 
 
+def _day(text: str | None) -> date | None:
+    try:
+        return date.fromisoformat(text[:10]) if text else None
+    except ValueError:
+        return None
+
+
+def previous_month(day: date) -> tuple[date, date]:
+    end = day.replace(day=1) - timedelta(days=1)
+    return end.replace(day=1), end
+
+
 def load_flows(store: Store) -> dict[str, EFlow]:
     flows = {}
     for r in store.query("SELECT flow_id, source, account_code, biz_date, biz_time, direction, amount_cents, "
-                         "src_category, counterparty, summary, initiator, status_text FROM flows WHERE removed = 0"):
+                         "src_category, counterparty, summary, initiator, status_text, period_start, period_end "
+                         "FROM flows WHERE removed = 0 AND source <> 'DERIVED'"):
         flows[r["flow_id"]] = EFlow(
             r["flow_id"], r["source"], r["account_code"], date.fromisoformat(r["biz_date"]),
             _parse_time(r["biz_time"]), r["direction"], r["amount_cents"], r["src_category"] or "",
-            r["counterparty"] or "", r["summary"] or "", r["initiator"] or "", r["status_text"] or "")
+            r["counterparty"] or "", r["summary"] or "", r["initiator"] or "", r["status_text"] or "",
+            _day(r["period_start"]), _day(r["period_end"]))
     return flows
 
 
@@ -96,6 +132,9 @@ class Matcher:
         self.auto_accounts = {a.code for a in settings.accounts if a.is_auto}
         self.zt_account = settings.zt_account.code if settings.zt_account else None
 
+    def _name(self, code: str) -> str:
+        return self.settings.account(code).name if self.settings.has_account(code) else code
+
     # ------------------------------------------------------------------ entry
     def run(self) -> MatchResult:
         flows = load_flows(self.store)
@@ -106,8 +145,11 @@ class Matcher:
         self._dedup(result)
         self._zt_topups(result)
         self._withdrawals(result)
+        self._sweeps(result)
         self._internal_transfers(result)
+        self._sweep_hints(result)
         self._review_leftovers(flows)
+        self._periods(result)
         return result
 
     # ------------------------------------------------------------------ steps
@@ -118,9 +160,11 @@ class Matcher:
             if f.account.startswith("UNMAPPED:"):
                 f.state, f.reason, f.kind = "REVIEW", "日记账账户未在配置中登记", "unmapped_account"
             mapping = self.settings.withdraw_initiators.get(f.initiator) if f.initiator else None
-            if mapping and mapping.get("category") and f.category == "XFER_ZT_WITHDRAW":
-                f.category = mapping["category"]
-                f.reason = f"提现发起人 {f.initiator} 已配置为“{categories.name(f.category)}”"
+            if mapping and f.src_category in WITHDRAW_TYPES:
+                if mapping.get("account"):
+                    f.category = "XFER_ZT_WITHDRAW"  # this initiator withdraws into one of our accounts
+                elif mapping.get("category"):
+                    f.category = mapping["category"]
 
     def _apply_manual(self, result: MatchResult) -> None:
         flows = result.flows
@@ -128,10 +172,15 @@ class Matcher:
             f = flows.get(d["flow_id"])
             if f is None:
                 continue
+            start, end = _day(d["period_start"]), _day(d["period_end"])
+            if start and end:
+                f.manual_period = (min(start, end), max(start, end))
+            decision = d["decision"]
+            if decision == "period":
+                continue  # only the business period is fixed
             f.locked = True
             if d["category"]:
                 f.category = d["category"]
-            decision = d["decision"]
             note = d["note"] or ""
             if decision == "ignore":
                 f.state, f.reason = "IGNORED", note or "人工忽略"
@@ -190,13 +239,23 @@ class Matcher:
                 j.state, j.link_id = "DUPLICATE", link
                 j.reason = f"与{best.source}记录重复（{best.day.isoformat()}）"
                 best.dup_link = link
-                if best.category == "UNCLASSIFIED" or (j.category != "UNCLASSIFIED" and best.category in
-                                                         ("INC_OTHER", "COST_OTHER")):
+                if j.category != "UNCLASSIFIED" and best.category in INHERITABLE and best.category != j.category:
                     best.category = j.category
                     best.reason = "科目取自日记账"
+                explicit = self._explicit_journal_period(j)
+                if explicit:
+                    best.dup_period = explicit
                 result.links.append({"link_id": link, "kind": "DUPLICATE", "flow_a": j.flow_id,
                                      "flow_b": best.flow_id, "biz_date": j.day.isoformat(), "amount_cents": j.amount,
                                      "fee_cents": 0, "rule": "same_account_direction_amount", "actor": "auto"})
+
+    @staticmethod
+    def _explicit_journal_period(f: EFlow) -> tuple[date, date] | None:
+        if f.source != "JOURNAL" or not f.period_start or not f.period_end:
+            return None
+        if f.period_start == f.day and f.period_end == f.day:
+            return None  # same as the entry date: the field was not really filled in
+        return f.period_start, f.period_end
 
     def _pair(self, result: MatchResult, outs: list[EFlow], ins: list[EFlow], *, kind: str, category: str,
               days: int, tolerance: bool, rule: str) -> None:
@@ -223,8 +282,8 @@ class Matcher:
             for side in (o, best):
                 side.state, side.category, side.link_id = "TRANSFER", category, link
             fee = o.amount - best.amount
-            o.reason = f"转入 {self.settings.account(best.account).name if self.settings.has_account(best.account) else best.account}"
-            best.reason = f"来自 {self.settings.account(o.account).name if self.settings.has_account(o.account) else o.account}"
+            o.reason = f"转入 {self._name(best.account)}"
+            best.reason = f"来自 {self._name(o.account)}"
             if fee:
                 o.reason += f"（手续费 {fee / 100:.2f}）"
             result.links.append({"link_id": link, "kind": kind, "flow_a": o.flow_id, "flow_b": best.flow_id,
@@ -242,21 +301,72 @@ class Matcher:
                    rule="topup_same_amount")
 
     def _withdrawals(self, result: MatchResult) -> None:
+        """Only initiators configured with a destination account are treated as internal transfers."""
         if not self.zt_account:
             return
         days = int(self.rules["withdraw_days"])
         outs = [f for f in result.flows.values() if self._free(f) and f.account == self.zt_account
                 and f.direction == "OUT" and f.category == "XFER_ZT_WITHDRAW"]
-        candidates = [f for f in result.flows.values() if self._free(f) and f.direction == "IN"
-                      and f.account != self.zt_account and f.category in XFER | {"UNCLASSIFIED"}]
-        by_target: dict[str | None, list[EFlow]] = defaultdict(list)
+        by_target: dict[str, list[EFlow]] = defaultdict(list)
         for o in outs:
-            mapping = self.settings.withdraw_initiators.get(o.initiator, {}) if o.initiator else {}
-            by_target[mapping.get("account")].append(o)
+            target = (self.settings.withdraw_initiators.get(o.initiator) or {}).get("account")
+            if target:
+                by_target[target].append(o)
         for target, group in by_target.items():
-            ins = [i for i in candidates if target is None or i.account == target]
+            ins = [i for i in result.flows.values() if self._free(i) and i.direction == "IN"
+                   and i.account == target]
             self._pair(result, group, ins, kind="ZT_WITHDRAW", category="XFER_ZT_WITHDRAW", days=days,
                        tolerance=False, rule="withdraw_same_amount")
+
+    # ---------------------------------------------------------- fund sweeps (余额宝)
+    def _derive(self, result: MatchResult, origin: EFlow, fund: str, reason_origin: str, reason_fund: str) -> None:
+        direction = "IN" if origin.direction == "OUT" else "OUT"
+        derived = EFlow(f"DERIVED:{fund}:{origin.flow_id}", "DERIVED", fund, origin.day, origin.time, direction,
+                        origin.amount, "内部划转", self._name(origin.account), origin.summary, "", "")
+        link = _link_id("SWEEP", origin.flow_id, derived.flow_id)
+        for side in (origin, derived):
+            side.state, side.category, side.link_id = "TRANSFER", "XFER_INTERNAL", link
+        origin.reason, derived.reason = reason_origin, reason_fund
+        result.derived.append(derived)
+        result.links.append({"link_id": link, "kind": "SWEEP", "flow_a": origin.flow_id, "flow_b": derived.flow_id,
+                             "biz_date": origin.day.isoformat(), "amount_cents": origin.amount, "fee_cents": 0,
+                             "rule": "fund_sweep", "actor": "auto"})
+
+    def _sweeps(self, result: MatchResult) -> None:
+        for sweep in self.settings.sweeps:
+            account, fund = sweep["account"], sweep["fund"]
+            to_fund = sweep.get("to_fund_summary", "余额自动转入")
+            from_fund = sweep.get("from_fund_summary", "转出到余额")
+            fund_name = self._name(fund)
+            for f in list(result.flows.values()):
+                if not self._free(f) or f.account != account:
+                    continue
+                if f.direction == "OUT" and f.summary == to_fund:
+                    self._derive(result, f, fund, f"转入{fund_name}", f"来自{self._name(account)}")
+                elif f.direction == "IN" and f.summary == from_fund:
+                    self._derive(result, f, fund, f"来自{fund_name}", f"转回{self._name(account)}")
+
+    def _sweep_hints(self, result: MatchResult) -> None:
+        """Owner transfers registered on other accounts (e.g. monthly hand-over to the cashier) come
+        from the fund when no matching outgoing record exists anywhere in the system."""
+        for sweep in self.settings.sweeps:
+            hints = [h for h in sweep.get("owner_hints") or [] if h]
+            accounts = set(sweep.get("hint_accounts") or [])
+            minimum = to_cents(sweep.get("hint_min_yuan", 1000))
+            if not hints:
+                continue
+            fund_name = self._name(sweep["fund"])
+            for f in list(result.flows.values()):
+                if not self._free(f) or f.direction != "IN" or f.amount < minimum:
+                    continue
+                if accounts and f.account not in accounts:
+                    continue
+                if f.account in (sweep["account"], sweep["fund"]):
+                    continue
+                text = f"{f.summary} {f.counterparty}"
+                if any(h in text for h in hints):
+                    self._derive(result, f, sweep["fund"], f"来自{fund_name}（店主汇总转入，非经营收入）",
+                                 f"转给{self._name(f.account)}")
 
     def _internal_transfers(self, result: MatchResult) -> None:
         days = int(self.rules["transfer_days"])
@@ -285,36 +395,70 @@ class Matcher:
                 f.state, f.kind = "REVIEW", "contradiction"
                 f.reason = f"登记科目“{_leaf(f.src_category)}”与收付方向（{'付款' if f.direction == 'OUT' else '收款'}）矛盾，请核实"
             elif f.category == "XFER_ZT_WITHDRAW" and f.account == self.zt_account:
-                age = (self.today - f.day).days
-                who = f"（发起人 {f.initiator}）" if f.initiator else ""
+                target = (self.settings.withdraw_initiators.get(f.initiator) or {}).get("account", "")
                 f.kind = "withdraw_unknown"
-                if age <= overdue:
-                    f.state, f.reason = "PENDING", f"中天提现{who}，等待到账"
+                if (self.today - f.day).days <= overdue:
+                    f.state, f.reason = "PENDING", f"提现到{self._name(target)}，等待到账"
                 else:
-                    f.state, f.reason = "REVIEW", f"中天提现{who}超过 {overdue} 天未在本网点账户找到入账，去向待确认"
+                    f.state, f.reason = "REVIEW", f"提现超过 {overdue} 天未在{self._name(target)}找到入账"
             elif f.category == "XFER_ZT_TOPUP":
                 f.kind = "topup_unmatched"
                 if (self.today - f.day).days <= 1:
                     f.state, f.reason = "PENDING", "中天充值，等待另一端记录"
                 elif f.account != self.zt_account:
-                    f.state = "REVIEW"
-                    f.reason = ("付款给中通总部，但中天账户当日及次日没有对应充值，"
-                                "请确认用途（面单/物料/保证金/其他）")
+                    # Paying ZTO head office without a matching ZT top-up = buying waybill numbers / materials.
+                    f.category, f.kind = "COST_WAYBILL", ""
+                    f.reason = "付中通总部且中天账户无对应充值，按购买单号/物料计"
             elif f.category == "XFER_INTERNAL":
                 f.state, f.kind = "REVIEW", "transfer_out_unknown" if f.direction == "OUT" else "transfer_in_unknown"
                 f.reason = ("转出到本网点其他账户，但未找到对应转入（对方账户可能未纳入系统）" if f.direction == "OUT"
                             else "转入但未找到来源账户的转出记录")
 
+    # ---------------------------------------------------------- business periods
+    def _periods(self, result: MatchResult) -> None:
+        acc = self.settings.accrual
+        prev_cats = set(acc.get("prev_month_categories") or [])
+        prev_min = to_cents(acc.get("prev_month_min_yuan", 5000))
+        lo, hi = (acc.get("prev_month_days") or [15, 28])[:2]
+        for f in list(result.flows.values()) + result.derived:
+            explicit = self._explicit_journal_period(f)
+            if f.manual_period:
+                (f.p_start, f.p_end), f.period_basis = f.manual_period, "manual"
+            elif explicit:
+                (f.p_start, f.p_end), f.period_basis = explicit, "journal"
+            elif f.dup_period:
+                (f.p_start, f.p_end), f.period_basis = f.dup_period, "journal_dup"
+            elif (f.category in prev_cats and f.source not in ("ZT_FLOW", "ZT_SUMMARY", "DERIVED")
+                  and f.direction == "OUT" and f.amount >= prev_min and lo <= f.day.day <= hi):
+                (f.p_start, f.p_end), f.period_basis = previous_month(f.day), "payroll"
+            else:
+                f.p_start, f.p_end, f.period_basis = f.day, f.day, "cash"
+
 
 def persist(store: Store, result: MatchResult) -> None:
+    now = now_text()
     with store.tx():
         store.execute("DELETE FROM flow_states")
         store.execute("DELETE FROM links")
+        store.execute("DELETE FROM flows WHERE source = 'DERIVED'")
+        for d in result.derived:
+            store.execute(
+                "INSERT INTO flows (flow_id, source, source_ref, account_code, biz_date, biz_time, direction, "
+                "amount_cents, counterparty, src_category, summary, raw_json, raw_hash, first_seen, last_seen) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (d.flow_id, "DERIVED", d.flow_id.split(":", 2)[2], d.account, d.day.isoformat(),
+                 d.time.strftime("%Y-%m-%d %H:%M:%S"), d.direction, d.amount, d.counterparty, d.src_category,
+                 d.summary, dumps({}), "derived", now, now))
         for link in result.links:
             store.execute("INSERT OR REPLACE INTO links (link_id, kind, flow_a, flow_b, biz_date, amount_cents, "
                           "fee_cents, rule, actor) VALUES (:link_id,:kind,:flow_a,:flow_b,:biz_date,:amount_cents,"
                           ":fee_cents,:rule,:actor)", link)
         store.conn.executemany(
-            "INSERT INTO flow_states (flow_id, biz_date, state, category, reason, link_id, kind) VALUES (?,?,?,?,?,?,?)",
-            [(f.flow_id, f.day.isoformat(), f.state, f.category, f.reason, f.link_id or f.dup_link, f.kind)
-             for f in result.flows.values()])
+            "INSERT INTO flow_states (flow_id, biz_date, state, category, reason, link_id, kind, p_start, p_end, "
+            "period_basis) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [(f.flow_id, f.day.isoformat(), f.state, f.category, f.reason, f.link_id or f.dup_link, f.kind,
+              f.p_start.isoformat() if f.p_start else None, f.p_end.isoformat() if f.p_end else None, f.period_basis)
+             for f in list(result.flows.values()) + result.derived])
+
+
+__all__ = ["EFlow", "Matcher", "MatchResult", "PERIOD_BASIS_CN", "categories", "persist", "previous_month"]

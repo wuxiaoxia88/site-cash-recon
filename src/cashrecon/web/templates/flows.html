@@ -5,12 +5,13 @@
 <select name="account"><option value="">全部账户</option>{% for a in accounts %}<option value="{{ a.account_code }}" {{ 'selected' if a.account_code==account }}>{{ a.name }}</option>{% endfor %}</select>
 <button>查看</button></form>
 <div class="card scroll"><table class="small">
-<tr><th>时间</th><th>账户</th><th>来源</th><th>收付</th><th class="n">金额</th><th class="n">余额</th><th>来源科目/对方</th><th>系统科目</th><th>状态</th><th>编号</th></tr>
+<tr><th>时间</th><th>账户</th><th>来源</th><th>收付</th><th class="n">金额</th><th class="n">余额</th><th>来源科目/对方</th><th>系统科目</th><th>业务期间</th><th>状态</th><th>编号</th></tr>
 {% for r in rows %}<tr><td>{{ r.biz_time[11:16] }}</td><td>{{ r.account_name or r.account_code }}</td><td>{{ r.source }}</td>
 <td>{{ '收' if r.direction=='IN' else '付' }}</td><td class="n">{{ r.amount_cents|yuan }}</td><td class="n">{{ r.balance_after_cents|yuan }}</td>
 <td>{{ r.src_category }}{% if r.counterparty %} <span class="muted">/ {{ r.counterparty }}</span>{% endif %}</td>
 <td>{{ r.category|catname if r.category else '' }}</td>
+<td class="muted">{% if r.p_start and (r.p_start != r.biz_date or r.p_end != r.biz_date) %}{{ r.p_start }}～{{ r.p_end }}{% endif %}</td>
 <td><span class="tag {{ r.state }}">{{ {'NORMAL':'正常','DUPLICATE':'重复已剔除','TRANSFER':'划转','PENDING':'在途','REVIEW':'待核','IGNORED':'已忽略'}.get(r.state, r.state) }}</span>
 {% if r.reason %}<br><span class="muted">{{ r.reason }}</span>{% endif %}</td><td class="muted">{{ r.flow_id }}</td></tr>
-{% else %}<tr><td colspan="10" class="muted">当日没有流水</td></tr>{% endfor %}
+{% else %}<tr><td colspan="11" class="muted">当日没有流水</td></tr>{% endfor %}
 </table></div>{% endblock %}

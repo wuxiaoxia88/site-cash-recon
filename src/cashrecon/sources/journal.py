@@ -15,7 +15,7 @@ PAGE_SIZE = 100
 SUMMARY_MAX_DAYS = 31
 MAX_PAGES = 200
 UNCATEGORIZED = {"", "-", "未归类", "None"}
-RAW_KEYS = ("id", "serialNumber", "accountName", "oneCategoryName", "secondCategoryName",
+RAW_KEYS = ("id", "serialNumber", "strDateFormat", "accountName", "oneCategoryName", "secondCategoryName",
             "thirdCategoryName", "descriptionName", "bizRemark", "bussinessSourseStr",
             "registrationStatusName", "payStatusName", "recordedStatusFormat", "afterBalance",
             "flowInvoiceAmount", "feeFlowTypeFormat", "communicationUnit", "billCode", "creator")
@@ -49,7 +49,15 @@ def map_record(row: dict[str, Any], settings: Settings) -> FlowRecord:
         raise SourceError("journal_record_incomplete")
     status = "/".join(str(row.get(k) or "") for k in
                       ("registrationStatusName", "payStatusName", "recordedStatusFormat", "bussinessSourseStr"))
+    period_start = period_end = None
+    if isinstance(row.get("strStartdate"), int) and isinstance(row.get("strEnddate"), int):
+        period_start = dates.from_millis(row["strStartdate"]).date().isoformat()
+        period_end = dates.from_millis(row["strEnddate"]).date().isoformat()
+        if period_end < period_start:
+            period_start, period_end = period_end, period_start
     return FlowRecord(
+        period_start=period_start,
+        period_end=period_end,
         source="JOURNAL",
         source_ref=str(row["id"]),
         account_code=account.code if account else unmapped_code(portal),

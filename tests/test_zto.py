@@ -81,3 +81,10 @@ def test_health():
     c = client([{"status": "ok", "auth": {"status": "ok"}}, urllib.error.URLError("x")])
     assert c.health() == [{"route": "primary", "ok": True, "auth": "ok"},
                           {"route": "fallback", "ok": False, "error": "network"}]
+
+
+def test_missing_endpoint_is_not_an_outage():
+    c = client([urllib.error.HTTPError("http://p", 404, "nf", {}, None), {"code": 200, "data": 1},
+                {"code": 200, "data": 2}])
+    assert c.data("site-journal-record", "page", {})[1] == "fallback"
+    assert c.data("site-journal-record", "page", {})[1] == "primary"  # primary still preferred

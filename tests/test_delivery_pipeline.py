@@ -230,7 +230,7 @@ def test_delivery_ledger_once_only(pipeline_env, monkeypatch):
     monkeypatch.setattr("cashrecon.delivery.mail.MailSender", FakeSender)
     first = {r.channel: r.status for r in deliver(store, settings, artifact)}
     assert first == {"kb": "verified", "mail": "sent"}
-    assert "经营" in mails[0]
+    assert "本月至今" in mails[0]
     second = {r.channel: r.status for r in deliver(store, settings, artifact)}
     assert second == {"kb": "skipped", "mail": "skipped"} and len(mails) == 1
     expected = hashlib.sha256(artifact.html_path.read_bytes()).hexdigest()

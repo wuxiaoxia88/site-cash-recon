@@ -3,14 +3,15 @@
 {% block body %}
 {% set p = v.p %}{% set pr = p.profit %}
 <div class="kpis">
-  <div class="kpi"><div class="label">经营利润（现金口径）</div>
-    <div class="value {{ 'neg' if pr.profit < 0 else 'pos' }}">{{ pr.profit|yuan }}</div>
-    <div class="hint">{% if v.delta.profit is not none %}较昨日 {{ v.delta.profit|yuan(sign=True) }}{% else %}&nbsp;{% endif %}{% if not pr.complete %} · 中天数据缺失{% endif %}</div></div>
-  <div class="kpi"><div class="label">经营收入</div><div class="value">{{ pr.income|yuan }}</div>
-    <div class="hint">中天 {{ (v.income_lines|sum(attribute='zt'))|yuan }} · 线下 {{ (v.income_lines|sum(attribute='offline'))|yuan }}</div></div>
-  <div class="kpi"><div class="label">经营成本</div><div class="value">{{ pr.cost|yuan }}</div>
+  <div class="kpi"><div class="label">本月至今经营利润</div>
+    <div class="value {{ 'neg' if v.mtd.profit < 0 else 'pos' }}">{{ v.mtd.profit|yuan }}</div>
+    <div class="hint">{{ v.mtd.days }} 天 · 按业务期间{% if not pr.complete %} · 中天数据缺失{% endif %}</div></div>
+  <div class="kpi"><div class="label">当日经营利润</div>
+    <div class="value {{ 'neg' if pr.profit < 0 else '' }}">{{ pr.profit|yuan }}</div>
+    <div class="hint">按收付日 {{ pr.cash.profit|yuan }}{% if v.delta.profit is not none %} · 较昨日 {{ v.delta.profit|yuan(sign=True) }}{% endif %}</div></div>
+  <div class="kpi"><div class="label">当日经营收入 / 成本</div><div class="value">{{ pr.income|wan }} / {{ pr.cost|wan }}</div>
     <div class="hint">{% if pr.income %}成本收入比 {{ (pr.cost / pr.income)|pct }}{% else %}&nbsp;{% endif %}</div></div>
-  <div class="kpi"><div class="label">现金头寸（7 个账户）</div><div class="value">{{ p.position.total|yuan }}</div>
+  <div class="kpi"><div class="label">现金头寸（{{ p.accounts|length }} 个账户）</div><div class="value">{{ p.position.total|yuan }}</div>
     <div class="hint">{% if v.delta.position is not none %}较昨日 {{ v.delta.position|yuan(sign=True) }}{% endif %} · 已核对 {{ p.position.verified|wan }}</div></div>
 </div>
 
@@ -32,7 +33,7 @@
   <td class="small muted">其中个人账户 {{ p.position.personal_funds|wan }}</td></tr>
 </table></div></section>
 
-<section><h2>利润表（现金口径）</h2>
+<section><h2>当日利润表（按业务期间）</h2>
 <div class="cols">
 {% for title, lines, total in [("收入", v.income_lines, pr.income), ("成本", v.cost_lines, pr.cost)] %}
 <div><h3>{{ title }} {{ total|yuan }}</h3>
@@ -52,19 +53,30 @@
 <span class="muted">。两种口径差异来自结算时间差与账单未覆盖的线下收支。</span></p>{% endif %}
 </section>
 
+{% if pr.deferred or pr.allocated_in %}<section><h2>业务期间说明</h2>
+{% if pr.deferred %}<h3>今日收付、计入其他期间</h3>
+<table class="small"><tr><th>账户</th><th>科目</th><th class="n">金额</th><th>计入期间</th><th>依据</th></tr>
+{% for d in pr.deferred %}<tr><td>{{ d.account }}</td><td>{{ d.text }}</td><td class="n">{{ money(d.amount) }}</td><td>{{ d.period }}</td><td class="muted">{{ d.basis }}</td></tr>{% endfor %}
+</table>{% endif %}
+{% if pr.allocated_in %}<h3>其他日期收付、分摊到今日</h3>
+<table class="small"><tr><th>账户</th><th>科目</th><th>收付日</th><th>期间</th><th class="n">总额</th><th class="n">今日分摊</th></tr>
+{% for d in pr.allocated_in %}<tr><td>{{ d.account }}</td><td>{{ d.text }}</td><td>{{ d.paid_on }}</td><td>{{ d.period }}</td><td class="n">{{ money(d.amount) }}</td><td class="n">{{ money(d.share) }}</td></tr>{% endfor %}
+</table>{% endif %}
+</section>{% endif %}
+
 <section><h2>资金去向</h2>
 {% set m = p.movements %}
 <table>
 {% for code, amount in m.totals.items() %}<tr><td>{{ m.totals_cn[code] }}</td><td class="n">{{ money(amount) }}</td></tr>{% endfor %}
 </table>
-{% if m.withdrawals_by_initiator %}<h3>中天提现（按发起人）</h3>
-<table><tr><th>发起人</th><th class="n">笔数</th><th class="n">金额</th><th class="n">已找到入账</th><th>用途</th></tr>
-{% for w in m.withdrawals_by_initiator %}<tr><td>{{ w.initiator }}</td><td class="n">{{ w.count }}</td><td class="n">{{ w.amount|yuan }}</td>
-<td class="n">{{ w.landed|yuan }}</td><td class="small">{{ w.mapped or '待确认' }}</td></tr>{% endfor %}
+{% if m.withdrawals_by_initiator %}<h3>中天预付款提现（承包区/业务员劳务费）</h3>
+<table><tr><th>提现人</th><th class="n">笔数</th><th class="n">金额</th><th>计入</th></tr>
+{% for w in m.withdrawals_by_initiator %}<tr><td>{{ w.label or w.initiator }}</td><td class="n">{{ w.count }}</td><td class="n">{{ w.amount|yuan }}</td>
+<td class="small">{{ w.mapped }}</td></tr>{% endfor %}
 </table>{% endif %}
 {% if m.transfers %}<h3>已匹配的划转/充值</h3>
 <table><tr><th>类型</th><th>从</th><th>到</th><th class="n">金额</th></tr>
-{% for t in m.transfers %}<tr><td>{{ {"TRANSFER":"账户间划转","ZT_TOPUP":"中天充值","ZT_WITHDRAW":"中天提现到账"}[t.kind] }}</td>
+{% for t in m.transfers %}<tr><td>{{ {"TRANSFER":"账户间划转","ZT_TOPUP":"中天充值","ZT_WITHDRAW":"中天提现到账","SWEEP":"余额宝转入转出"}.get(t.kind, t.kind) }}</td>
 <td>{{ t['from'] }}</td><td>{{ t.to }}</td><td class="n">{{ t.amount|yuan }}{% if t.fee %}<span class="muted small">（手续费 {{ t.fee|yuan }}）</span>{% endif %}</td></tr>{% endfor %}
 </table>{% endif %}
 </section>

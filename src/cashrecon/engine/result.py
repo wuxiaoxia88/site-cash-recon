@@ -102,6 +102,8 @@ def recon_summary(store: Store, day: date) -> dict[str, Any]:
 
 def movements_detail(store: Store, settings: Settings, day: date, totals: dict[str, int]) -> dict[str, Any]:
     text = day.isoformat()
+    from cashrecon import staff
+    directory = staff.names(store, settings)
     zt = settings.zt_account.code if settings.zt_account else ""
     withdrawals = _flow_rows(store, "f.account_code = ? AND f.biz_date = ? AND f.direction = 'OUT' "
                              "AND f.src_category IN ('线下提现','中天余额提现')", (zt, text))
@@ -113,13 +115,15 @@ def movements_detail(store: Store, settings: Settings, day: date, totals: dict[s
     by_initiator: dict[str, dict[str, Any]] = {}
     for w in withdrawals:
         key = w["initiator"] or "未知"
-        entry = by_initiator.setdefault(key, {"initiator": key, "count": 0, "amount": 0, "landed": 0})
+        entry = by_initiator.setdefault(key, {"initiator": key, "name": directory.get(key, ""),
+                                              "label": staff.label(key, directory), "count": 0, "amount": 0,
+                                              "landed": 0, "category": w["category"]})
         entry["count"] += 1
         entry["amount"] += w["amount_cents"]
         entry["landed"] += w["amount_cents"] if w["landed"] else 0
         mapping = settings.withdraw_initiators.get(key, {})
-        entry["mapped"] = mapping.get("note") or mapping.get("account") or categories.name(mapping["category"]) \
-            if mapping.get("category") else mapping.get("note") or mapping.get("account") or ""
+        entry["mapped"] = (mapping.get("note") or (f"转入{mapping['account']}" if mapping.get("account") else "")
+                           or categories.name(w["category"]))
     transfers = []
     for link in store.query("SELECT * FROM links WHERE biz_date = ? AND kind IN ('TRANSFER','ZT_TOPUP','ZT_WITHDRAW')",
                             (text,)):

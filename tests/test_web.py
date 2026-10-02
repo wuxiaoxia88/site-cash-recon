@@ -92,3 +92,13 @@ def test_manual_balance_entry(client):
         payload = json.loads(db.scalar("SELECT payload FROM daily_results WHERE biz_date='2026-09-30'"))
     wechat = next(a for a in payload["accounts"] if a["code"] == "STAFF_WECHAT")
     assert wechat["status"] == "DIFF"
+
+
+def test_set_business_period(client):
+    c, paths = client
+    t = token(c)
+    c.post("/review/decide", data={"csrf": t, "flow_id": "JOURNAL:j1", "decision": "period",
+                                   "period_start": "2026-09-01", "period_end": "2026-09-30"})
+    with Store(paths.database) as db:
+        row = db.one("SELECT p_start, p_end, period_basis FROM flow_states WHERE flow_id='JOURNAL:j1'")
+    assert tuple(row) == ("2026-09-01", "2026-09-30", "manual")

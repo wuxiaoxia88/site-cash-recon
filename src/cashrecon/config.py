@@ -27,7 +27,7 @@ ACCOUNT_TYPE_CN = {
     "CASH": "现金",
     "OTHER": "其他",
 }
-COLLECTIONS = {"auto", "manual"}
+COLLECTIONS = {"auto", "manual", "derived"}
 
 DEFAULT_RULES: dict[str, Any] = {
     "dedup_days": 2,
@@ -50,6 +50,7 @@ DEFAULT_ALERTS: dict[str, Any] = {
     "unclassified_ratio": 0.05,
     "withdraw_overdue_days": 3,
     "cooldown_hours": 24,
+    "mtd_loss_from_day": 25,
 }
 
 DEFAULT_SCHEDULE: dict[str, str] = {
@@ -57,9 +58,17 @@ DEFAULT_SCHEDULE: dict[str, str] = {
     "retry": "18:00",
     "weekly": "MON 12:20",
     "monthly": "3 12:30",
+    "monthly_final": "25 12:40",
 }
 
 DEFAULT_WEB: dict[str, Any] = {"host": "127.0.0.1", "port": 8765}
+
+DEFAULT_ACCRUAL: dict[str, Any] = {
+    # Monthly payroll-type payments made around the 20th belong to the previous month.
+    "prev_month_categories": ["COST_LABOR", "COST_STATION_DISPATCH"],
+    "prev_month_min_yuan": 5000,
+    "prev_month_days": [15, 28],
+}
 
 
 class ConfigError(RuntimeError):
@@ -90,6 +99,10 @@ class Account:
     def is_auto(self) -> bool:
         return self.collection == "auto"
 
+    @property
+    def is_derived(self) -> bool:
+        return self.collection == "derived"
+
 
 @dataclass
 class Settings:
@@ -105,6 +118,9 @@ class Settings:
     web: dict[str, Any]
     analysis: dict[str, Any]
     withdraw_initiators: dict[str, dict[str, str]]
+    site_code: str = ""
+    sweeps: list[dict[str, Any]] = field(default_factory=list)
+    accrual: dict[str, Any] = field(default_factory=dict)
     secrets: dict[str, str] = field(repr=False, default_factory=dict)
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
@@ -227,6 +243,13 @@ def settings_from_dict(data: dict[str, Any], paths: Paths, secrets: dict[str, st
     if not isinstance(sources, dict):
         raise ConfigError("[sources] must be a table")
     initiators = data.get("withdraw_initiators") or {}
+    sweeps = data.get("sweeps") or []
+    if not isinstance(sweeps, list):
+        raise ConfigError("[[sweeps]] must be an array of tables")
+    for i, sweep in enumerate(sweeps):
+        for key in ("account", "fund"):
+            if sweep.get(key) not in codes:
+                raise ConfigError(f"sweeps[{i}].{key} refers to an unknown account")
     return Settings(
         paths=paths,
         site_name=str(site["name"]).strip(),
@@ -240,6 +263,9 @@ def settings_from_dict(data: dict[str, Any], paths: Paths, secrets: dict[str, st
         web=_merged(DEFAULT_WEB, data.get("web")),
         analysis=copy.deepcopy(data.get("analysis") or {}),
         withdraw_initiators={str(k): dict(v) for k, v in initiators.items()},
+        site_code=str(site.get("code", "")).strip(),
+        sweeps=[dict(x) for x in sweeps],
+        accrual=_merged(DEFAULT_ACCRUAL, data.get("accrual")),
         secrets=dict(secrets or {}),
         raw=data,
     )

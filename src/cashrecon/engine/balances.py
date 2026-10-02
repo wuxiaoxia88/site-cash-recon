@@ -45,7 +45,62 @@ def _primary_source(account: Account, settings: Settings) -> str:
     return "JOURNAL"
 
 
+def _base_view(settings: Settings, account: Account, source: str) -> dict[str, Any]:
+    return {
+        "code": account.code, "name": account.name, "type": account.type_cn, "domain": account.domain,
+        "collection": {"auto": "自动采集", "manual": "人工登记", "derived": "系统推算"}[account.collection],
+        "personal_funds": account.personal_funds, "source": source, "opening": None, "inflow": None,
+        "outflow": None, "closing": None, "calc_closing": None, "checks": [], "status": "MISSING",
+        "status_cn": STATUS_CN["MISSING"], "note": "", "low_balance": settings.low_balance_cents(account),
+        "below_low": False, "carried": False, "diff_reason": "", "last_manual_check": None,
+    }
+
+
+def derived_view(store: Store, settings: Settings, account: Account, day: date) -> dict[str, Any]:
+    """Virtual account (e.g. 余额宝): balance = first manual balance + derived movements since then."""
+    view = _base_view(settings, account, "DERIVED")
+    text = day.isoformat()
+    day_end = f"{text} 23:59:59"
+    moves = store.query("SELECT biz_time, direction, amount_cents FROM flows WHERE account_code = ? "
+                        "AND source = 'DERIVED' AND removed = 0 ORDER BY biz_time", (account.code,))
+    today = [m for m in moves if m["biz_time"][:10] == text]
+    view["inflow"] = sum(m["amount_cents"] for m in today if m["direction"] == "IN")
+    view["outflow"] = sum(m["amount_cents"] for m in today if m["direction"] == "OUT")
+    entries = store.query("SELECT as_of, balance_cents FROM manual_balances WHERE account_code = ? ORDER BY as_of",
+                          (account.code,))
+    if not entries or entries[0]["as_of"] > day_end:
+        view["note"] = "尚无起点余额：请在控制台“余额录入”填写一次实际余额，之后系统按转入转出自动推算"
+        return view
+    anchor = entries[0]
+
+    def book(at: str) -> int:
+        net = sum((m["amount_cents"] if m["direction"] == "IN" else -m["amount_cents"]) for m in moves
+                  if anchor["as_of"] < m["biz_time"][:16] and m["biz_time"][:16] <= at[:16])
+        return anchor["balance_cents"] + net
+
+    closing = book(day_end)
+    view.update(closing=closing, opening=closing - view["inflow"] + view["outflow"],
+                calc_closing=closing, note=f"以 {anchor['as_of']} 录入余额为起点推算（收益未计入，会体现为差额）")
+    checks = [e for e in entries[1:] if e["as_of"][:10] == text]
+    for e in checks:
+        expected = book(e["as_of"])
+        view["checks"].append({"label": f"人工核对实际余额（{e['as_of']}）", "value": e["balance_cents"],
+                               "diff": e["balance_cents"] - expected, "kind": "independent"})
+    if any(c["diff"] for c in view["checks"]):
+        view["status"], view["diff_reason"] = "DIFF", "实际余额与推算不一致（常见原因：余额宝收益）"
+    elif view["checks"] or anchor["as_of"][:10] == text:
+        view["status"] = "MATCH"
+    else:
+        view["status"] = "BOOK_ONLY"
+    view["status_cn"] = STATUS_CN[view["status"]]
+    view["last_manual_check"] = dict(entries[-1]) if entries[-1]["as_of"] <= day_end else dict(anchor)
+    view["below_low"] = False
+    return view
+
+
 def account_view(store: Store, settings: Settings, account: Account, day: date) -> dict[str, Any]:
+    if account.is_derived:
+        return derived_view(store, settings, account, day)
     text = day.isoformat()
     source = _primary_source(account, settings)
     primary = _balance(store, text, account.code, source)
@@ -56,14 +111,7 @@ def account_view(store: Store, settings: Settings, account: Account, day: date) 
             primary = {"opening_cents": previous["closing_cents"], "closing_cents": previous["closing_cents"],
                        "inflow_cents": 0, "outflow_cents": 0, "note": "当日无登记，沿用前日余额"}
             carried = True
-    view: dict[str, Any] = {
-        "code": account.code, "name": account.name, "type": account.type_cn, "domain": account.domain,
-        "collection": "自动采集" if account.is_auto else "人工登记", "personal_funds": account.personal_funds,
-        "source": source, "opening": None, "inflow": None, "outflow": None, "closing": None,
-        "calc_closing": None, "checks": [], "status": "MISSING", "status_cn": STATUS_CN["MISSING"], "note": "",
-        "low_balance": settings.low_balance_cents(account), "below_low": False, "carried": False,
-        "diff_reason": "", "last_manual_check": None,
-    }
+    view = _base_view(settings, account, source)
     if primary is None:
         view["note"] = "该账户当日没有数据"
         return view

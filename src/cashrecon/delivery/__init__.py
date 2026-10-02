@@ -59,23 +59,25 @@ def mail_content(artifact: ReportArtifact, settings: Settings, link: str | None)
     status = _data_status(artifact)
     if "p" in view:
         p = view["p"]
-        kpis = [("经营利润（现金口径）", fmt_yuan(p["profit"]["profit"])), ("经营收入", fmt_yuan(p["profit"]["income"])),
-                ("经营成本", fmt_yuan(p["profit"]["cost"])), ("现金头寸", fmt_yuan(p["position"]["total"]))]
+        kpis = [("本月至今经营利润", fmt_yuan(view["mtd"]["profit"])),
+                ("当日经营利润（按业务期间）", fmt_yuan(p["profit"]["profit"])),
+                ("当日经营收入 / 成本", f"{fmt_yuan(p['profit']['income'])} / {fmt_yuan(p['profit']['cost'])}"),
+                ("现金头寸", fmt_yuan(p["position"]["total"]))]
         if p.get("bill_profit"):
             kpis.append(("账单口径利润（对照）", fmt_yuan(p["bill_profit"]["profit_cents"])))
     else:
         a = view["agg"]
-        kpis = [("经营利润（现金口径）", fmt_yuan(a["profit"])), ("经营收入", fmt_yuan(a["income"])),
+        kpis = [("经营利润（按业务期间）", fmt_yuan(a["profit"])), ("经营收入", fmt_yuan(a["income"])),
                 ("经营成本", fmt_yuan(a["cost"])), ("期末现金头寸", fmt_yuan(view["position_end"]["total"])),
                 ("亏损天数", f"{len(view['loss_days'])} / {view['days_present']}")]
     html = environment().get_template("mail.html.j2").render(v=view, kpis=kpis, link=link,
                                                              status=STATUS_CN.get(status, status))
     urgent = any(i["level"] == "high" for i in view["items"])
     prefix = "【紧急】" if urgent else ""
-    profit = view["p"]["profit"]["profit"] if "p" in view else view["agg"]["profit"]
-    word = "盈利" if profit >= 0 else "亏损"
+    profit = view["mtd"]["profit"] if "p" in view else view["agg"]["profit"]
+    word = ("本月至今" if "p" in view else "") + ("盈利" if profit >= 0 else "亏损")
     todo = sum(1 for i in view["items"] if i["level"] in ("high", "medium"))
-    subject = (f"{prefix}【{view['title']}】{settings.site_name} {view['period_label']}｜经营{word} "
+    subject = (f"{prefix}【{view['title']}】{settings.site_name} {view['period_label']}｜{word} "
                f"{fmt_yuan(abs(profit))} 元｜{todo} 项待处理")
     if status != "OK":
         subject += "｜数据不完整"

@@ -19,7 +19,8 @@ def test_parse_slots():
 
 def test_plan_uses_settings(settings):
     jobs = dict(plan(settings, with_console=True))
-    assert set(jobs) == {"daily", "retry", "weekly", "monthly", "console"}
+    assert set(jobs) == {"daily", "retry", "weekly", "monthly", "monthly_final", "console"}
+    assert jobs["monthly_final"].day == 25
     assert (jobs["retry"].hour, jobs["retry"].minute) == (18, 0)
 
 

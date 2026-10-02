@@ -8,13 +8,14 @@ from datetime import date, timedelta
 from typing import Any
 
 from cashrecon import dates
-from cashrecon.analysis import ActionItem, action_items, analysis, headline, load_history
+from cashrecon.analysis import ActionItem, action_items, analysis, headline, load_history, month_to_date
 from cashrecon.config import Settings
 from cashrecon.db import Store
 from cashrecon.engine import categories
 from cashrecon.reports import charts
 
-TITLES = {"daily": "网点资金日报", "weekly": "网点资金周报", "monthly": "网点资金月报"}
+TITLES = {"daily": "网点资金日报", "weekly": "网点资金周报", "monthly": "网点资金月报",
+          "monthly_final": "网点资金月报（定稿）"}
 
 
 class ReportError(RuntimeError):
@@ -56,7 +57,8 @@ def daily_view(store: Store, settings: Settings, day: date) -> dict[str, Any]:
         "period_key": payload["day"],
         "generated_at": payload["generated_at"],  # data computation time: same data => identical report
         "p": payload,
-        "headline": headline(payload, items),
+        "headline": headline(payload, items, history),
+        "mtd": month_to_date(payload, history),
         "items": [i.to_dict() for i in items],
         "analysis": analysis(payload, history, settings),
         "previous": previous,
@@ -94,7 +96,8 @@ def _aggregate(payloads: list[dict[str, Any]]) -> dict[str, Any]:
                 bill[k] += p["bill_profit"][k]
         for w in p["movements"].get("withdrawals_by_initiator") or []:
             entry = initiators.setdefault(w["initiator"], {"initiator": w["initiator"], "count": 0, "amount": 0,
-                                                          "landed": 0, "mapped": w.get("mapped", "")})
+                                                          "landed": 0, "mapped": w.get("mapped", ""),
+                                                          "label": w.get("label") or w["initiator"]})
             for k in ("count", "amount", "landed"):
                 entry[k] += w[k]
         duplicates += p["recon"].get("duplicates") or 0
@@ -140,6 +143,7 @@ def period_view(store: Store, settings: Settings, cadence: str, start: date, end
     if not present:
         raise ReportError(f"{start}～{end} 没有任何日结果")
     agg = _aggregate(present)
+    agg["cash_profit"] = sum(p["profit"].get("cash", {}).get("profit", p["profit"]["profit"]) for p in present)
     length = (end - start).days + 1
     prev_start = start - timedelta(days=length) if cadence == "weekly" else (start - timedelta(days=1)).replace(day=1)
     prev_end = start - timedelta(days=1)
@@ -159,6 +163,16 @@ def period_view(store: Store, settings: Settings, cadence: str, start: date, end
         status_days[p["data_status"]] += 1
     label = (f"{start.isoformat()} 至 {end.isoformat()}" if cadence == "weekly" else f"{start.year} 年 {start.month} 月")
     period_key = f"{start.isoformat()}_{end.isoformat()}" if cadence == "weekly" else start.strftime("%Y-%m")
+    if cadence in ("monthly", "monthly_final") and agg["profit"] < 0:
+        items.insert(0, ActionItem("high", "month_loss", f"{label}经营亏损 {abs(agg['profit']) / 100:,.2f} 元",
+                                   amount=agg["profit"], key="month_loss",
+                                   action="对照利润表逐项核实成本，重点看人工、面单物料与派费"))
+    note = ""
+    if cadence == "monthly":
+        note = ("本报告为初版：直营员工工资、驿站派费通常在次月 20 日左右登记并计入本月，"
+                "次月 25 日将发送定稿版。")
+    elif cadence == "monthly_final":
+        note = "定稿版：已包含次月 20 日前后登记的本月工资与派费。之后补登的款项仍会更新系统数据。"
     view = {
         "cadence": cadence,
         "title": TITLES[cadence],
@@ -186,6 +200,7 @@ def period_view(store: Store, settings: Settings, cadence: str, start: date, end
         "chart_profit": charts.bar_chart(labels, [p["profit"]["profit"] for p in present], title="每日经营利润"),
         "chart_position": charts.line_chart(labels, [p["position"]["total"] for p in present], title="现金头寸"),
         "kb_link": _kb_link(settings, cadence, period_key),
+        "note": note,
     }
     days = view["days_present"]
     word = "盈利" if agg["profit"] >= 0 else "亏损"

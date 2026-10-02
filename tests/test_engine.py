@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import copy
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from cashrecon.config import settings_from_dict
 from cashrecon.db import now_text
-from cashrecon.engine import reconcile
+from cashrecon.engine import reconcile, reconcile_full
 from cashrecon.engine.accounts import sync_accounts
 from cashrecon.engine.matching import Matcher
+from cashrecon.engine.result import load_daily_result
 from cashrecon.engine.rules import ensure_default_rules
 from cashrecon.ingest import ingest
 from cashrecon.sources.base import BalanceRecord, FlowRecord, SourceBatch
@@ -33,7 +34,8 @@ def add(store, day, flows=(), balances=(), zt=(), source="TEST"):
 @pytest.fixture
 def env(paths, store):
     data = copy.deepcopy(BASE_CONFIG)
-    data["withdraw_initiators"] = {"000.9": {"category": "COST_LABOR", "note": "工资代发"}}
+    data["withdraw_initiators"] = {"000.1": {"account": "ICBC_CARD"}, "000.3": {"account": "ICBC_CARD"},
+                                   "000.9": {"category": "COST_OTHER", "note": "其他用途"}}
     settings = settings_from_dict(data, paths)
     ensure_default_rules(store)
     sync_accounts(store, settings)
@@ -61,11 +63,14 @@ def test_dedup_topup_withdraw_and_transfers(env):
         flow("JOURNAL", "j5", "CORP", D1, "OUT", 20000, "中天余额充值（支付宝）"),
         flow("BANK_SMS", "b4", "CORP", D1, "OUT", 20000, "", "中通快递股份有限公司"),
         flow("ZT_FLOW", "z1", "ZT_MAIN", D1, "IN", 20000, "中通支付充值"),
-        # withdrawals: landed / unknown / mapped to labour cost
+        # withdrawals: default labour cost / mapped to an own account (landed or not) / mapped category
         flow("ZT_FLOW", "w1", "ZT_MAIN", D1, "OUT", 3000, "线下提现", initiator="000.1"),
         flow("ICBC", "i1", "ICBC_CARD", D3, "IN", 3000, "跨行汇款"),
         flow("ZT_FLOW", "w2", "ZT_MAIN", D1, "OUT", 10000, "线下提现", initiator="000.2"),
         flow("ZT_FLOW", "w3", "ZT_MAIN", D1, "OUT", 7000, "线下提现", initiator="000.9"),
+        flow("ZT_FLOW", "w4", "ZT_MAIN", D1, "OUT", 4000, "线下提现", initiator="000.3"),
+        # paying ZTO head office without a ZT top-up = buying waybill numbers
+        flow("BANK_SMS", "b9", "CORP", D1, "OUT", 28500, "", "中通快递股份有限公司"),
         # internal transfer with a small fee, plus an outgoing transfer with no partner
         flow("ALIPAY", "a1", "OWNER_ALIPAY", D1, "OUT", 1000, "提现至银行卡"),
         flow("JOURNAL", "j6", "STAFF_WECHAT", D1, "IN", 998, ""),
@@ -86,8 +91,10 @@ def test_dedup_topup_withdraw_and_transfers(env):
     assert s["JOURNAL:j5"][0] == "DUPLICATE"
     assert s["BANK_SMS:b4"] == s["ZT_FLOW:z1"] == ("TRANSFER", "XFER_ZT_TOPUP")
     assert s["ZT_FLOW:w1"] == s["ICBC:i1"] == ("TRANSFER", "XFER_ZT_WITHDRAW")
-    assert s["ZT_FLOW:w2"][0] == "REVIEW" and "去向待确认" in result.flows["ZT_FLOW:w2"].reason
-    assert s["ZT_FLOW:w3"] == ("NORMAL", "COST_LABOR")
+    assert s["ZT_FLOW:w2"] == ("NORMAL", "COST_LABOR")  # contractor/courier withdrawal = labour cost
+    assert s["ZT_FLOW:w3"] == ("NORMAL", "COST_OTHER")
+    assert s["ZT_FLOW:w4"][0] == "REVIEW"  # mapped to an own account but never arrived
+    assert s["BANK_SMS:b9"] == ("NORMAL", "COST_WAYBILL")
     assert s["ALIPAY:a1"] == s["JOURNAL:j6"] == ("TRANSFER", "XFER_INTERNAL")
     fee_link = next(lk for lk in result.links if lk["flow_a"] == "ALIPAY:a1")
     assert fee_link["fee_cents"] == 200
@@ -96,7 +103,8 @@ def test_dedup_topup_withdraw_and_transfers(env):
     assert s["JOURNAL:j8"][0] == "REVIEW" and "矛盾" in result.flows["JOURNAL:j8"].reason
     assert s["JOURNAL:j9"][0] == "IGNORED"
     recent = Matcher(store, settings, today=date(2026, 9, 2)).run()
-    assert recent.flows["ZT_FLOW:w2"].state == "PENDING"
+    assert recent.flows["ZT_FLOW:w4"].state == "PENDING"
+    assert recent.flows["BANK_SMS:b9"].state == "PENDING"  # top-up may still arrive
 
 
 def test_manual_decisions_override(env):
@@ -108,11 +116,11 @@ def test_manual_decisions_override(env):
         flow("ZT_FLOW", "w2", "ZT_MAIN", D1, "OUT", 10000, "线下提现", initiator="000.2"),
     ])
     now = now_text()
-    store.execute("INSERT INTO manual_decisions VALUES ('ALIPAY:a2','transfer','JOURNAL:j1',NULL,'店主转人工账户',?,?)",
+    store.execute("INSERT INTO manual_decisions (flow_id, decision, target_flow_id, category, note, actor, created_at) VALUES ('ALIPAY:a2','transfer','JOURNAL:j1',NULL,'店主转人工账户',?,?)",
                   ("tester", now))
-    store.execute("INSERT INTO manual_decisions VALUES ('JOURNAL:j2','ignore',NULL,NULL,'测试数据',?,?)",
+    store.execute("INSERT INTO manual_decisions (flow_id, decision, target_flow_id, category, note, actor, created_at) VALUES ('JOURNAL:j2','ignore',NULL,NULL,'测试数据',?,?)",
                   ("tester", now))
-    store.execute("INSERT INTO manual_decisions VALUES ('ZT_FLOW:w2','normal',NULL,'COST_LABOR','承包区结算',?,?)",
+    store.execute("INSERT INTO manual_decisions (flow_id, decision, target_flow_id, category, note, actor, created_at) VALUES ('ZT_FLOW:w2','normal',NULL,'COST_LABOR','承包区结算',?,?)",
                   ("tester", now))
     result = Matcher(store, settings, today=date(2026, 9, 30)).run()
     assert result.flows["ALIPAY:a2"].state == result.flows["JOURNAL:j1"].state == "TRANSFER"
@@ -151,10 +159,11 @@ def test_daily_result_profit_balances_and_status(env):
     assert lines["INC_DELIVERY"] == 1836352
     assert lines["INC_PICKUP"] == 5500000
     assert lines["COST_SEND_DISPATCH"] == -1661993 and lines["COST_LINEHAUL"] == -471842
-    assert lines["COST_LABOR"] == -225800
+    assert lines["COST_LABOR"] == -225800 - 3580000  # ZT withdrawals are contractor/courier labour cost
     assert profit["income"] == 1836352 + 5500000
-    assert profit["cost"] == 1661993 + 471842 + 225800
+    assert profit["cost"] == 1661993 + 471842 + 225800 + 3580000
     assert profit["profit"] == profit["income"] - profit["cost"]
+    assert profit["cash"]["profit"] == profit["profit"]  # nothing deferred on this day
     assert profit["movements"]["XFER_ZT_TOPUP"] == 4000000
     assert profit["unclassified"]["count"] == 2  # ZT 神秘科目 + offline 神秘收入
     views = {v["code"]: v for v in payload["accounts"]}
@@ -177,3 +186,80 @@ def test_data_status_missing_when_required_source_failed(env):
     assert payload["data_status"] == "MISSING"
     assert "门户日记账" in payload["missing_sources"]
     assert states(store) == {}
+
+
+# ------------------------------------------------------------------ business periods, sweeps, refresh
+def test_allocate_sums_exactly():
+    from cashrecon.engine.profit import allocate
+    start, end = date(2026, 8, 1), date(2026, 8, 31)
+    shares = [allocate(-10204783, start, end, start + timedelta(days=i)) for i in range(31)]
+    assert sum(shares) == -10204783 and max(shares) - min(shares) <= 1
+    assert allocate(100, start, end, date(2026, 9, 1)) == 0
+
+
+def test_periods_payroll_journal_manual_and_duplicate(env):
+    settings, store = env
+    s20 = date(2026, 9, 20)
+    add(store, s20, [
+        flow("JOURNAL", "pay", "STAFF_ALIPAY", s20, "OUT", 102047.83, "付业务员工资"),
+        flow("JOURNAL", "stn", "STAFF_ALIPAY", s20, "OUT", 56236.74, "付驿站入库费"),
+        flow("JOURNAL", "tmp", "STAFF_WECHAT", s20, "OUT", 120, "工资-操作"),  # small: same day
+        flow("JOURNAL", "rent", "STAFF_WECHAT", s20, "OUT", 3000, "场地租金"),
+        flow("JOURNAL", "dupj", "CORP", s20, "IN", 160000, "收客户运费"),
+        flow("BANK_SMS", "dupb", "CORP", s20, "IN", 160000, "经营收入"),
+    ])
+    store.execute("UPDATE flows SET period_start='2026-09-01', period_end='2026-09-30' WHERE flow_id='JOURNAL:rent'")
+    store.execute("UPDATE flows SET period_start='2026-08-01', period_end='2026-08-31' WHERE flow_id='JOURNAL:dupj'")
+    store.execute("INSERT INTO manual_decisions (flow_id, decision, period_start, period_end, note, actor, created_at) "
+                  "VALUES ('JOURNAL:tmp','period','2026-09-19','2026-09-19','','t','x')")
+    flows = Matcher(store, settings, today=date(2026, 10, 1)).run().flows
+    assert (flows["JOURNAL:pay"].p_start, flows["JOURNAL:pay"].period_basis) == (date(2026, 8, 1), "payroll")
+    assert flows["JOURNAL:stn"].category == "COST_STATION_DISPATCH" and flows["JOURNAL:stn"].p_end == date(2026, 8, 31)
+    assert (flows["JOURNAL:tmp"].p_start, flows["JOURNAL:tmp"].period_basis) == (date(2026, 9, 19), "manual")
+    assert flows["JOURNAL:rent"].period_basis == "journal"
+    assert (flows["BANK_SMS:dupb"].p_start, flows["BANK_SMS:dupb"].period_basis) == (date(2026, 8, 1), "journal_dup")
+
+
+def test_fund_sweep_and_owner_handover(paths, store):
+    data = copy.deepcopy(BASE_CONFIG)
+    data["accounts"].append({"code": "FUND", "name": "余额宝", "type": "ALIPAY", "collection": "derived"})
+    data["sweeps"] = [{"account": "OWNER_ALIPAY", "fund": "FUND", "owner_hints": ["店主甲"],
+                       "hint_accounts": ["STAFF_ALIPAY"]}]
+    settings = settings_from_dict(data, paths)
+    ensure_default_rules(store)
+    sync_accounts(store, settings)
+    d = date(2026, 9, 20)
+    add(store, d, [
+        flow("ALIPAY", "s1", "OWNER_ALIPAY", d, "OUT", 20125, "账户间互转", "****y"),
+        flow("ALIPAY", "s2", "OWNER_ALIPAY", d, "IN", 2000, "未分类", "****y"),
+        flow("JOURNAL", "h1", "STAFF_ALIPAY", d, "IN", 177816.84, "直链代取收入/收大客户快递费"),
+    ])
+    store.execute("UPDATE flows SET summary='余额自动转入' WHERE flow_id='ALIPAY:s1'")
+    store.execute("UPDATE flows SET summary='转出到余额' WHERE flow_id='ALIPAY:s2'")
+    store.execute("UPDATE flows SET summary='店主甲' WHERE flow_id='JOURNAL:h1'")
+    store.execute("INSERT INTO manual_balances VALUES ('FUND','2026-09-19 20:00', 50000000, '', 't', 'x')")
+    payload = reconcile(store, settings, [d], today=date(2026, 9, 25))[0]
+    st = states(store)
+    assert st["ALIPAY:s1"] == st["ALIPAY:s2"] == st["JOURNAL:h1"] == ("TRANSFER", "XFER_INTERNAL")
+    assert payload["profit"]["income"] == 0  # the hand-over is not revenue
+    fund = next(a for a in payload["accounts"] if a["code"] == "FUND")
+    assert fund["closing"] == 50000000 + 2012500 - 200000 - 17781684
+    assert fund["status"] == "BOOK_ONLY" and fund["collection"] == "系统推算"
+
+
+def test_late_payroll_refreshes_previous_month(env):
+    settings, store = env
+    aug = [date(2026, 8, 1) + timedelta(days=i) for i in range(31)]
+    for day in aug:
+        store.execute("INSERT INTO fetches (source, biz_date, status, started_at, finished_at) VALUES "
+                      "('JOURNAL', ?, 'ok', 'x', 'x')", (day.isoformat(),))
+    reconcile(store, settings, aug, today=date(2026, 9, 1))
+    before = load_daily_result(store, "2026-08-15")["profit"]["cost"]
+    s20 = date(2026, 9, 20)
+    add(store, s20, [flow("JOURNAL", "pay", "STAFF_ALIPAY", s20, "OUT", 31000, "付业务员工资")])
+    payloads, refreshed = reconcile_full(store, settings, [s20], today=date(2026, 9, 21))
+    assert len(refreshed) == 31 and date(2026, 8, 15) in refreshed
+    assert load_daily_result(store, "2026-08-15")["profit"]["cost"] == before + 100000
+    sep20 = payloads[0]["profit"]
+    assert sep20["cost"] == 0 and sep20["cash"]["cost"] == 3100000
+    assert sep20["deferred"][0]["period"] == "2026-08-01～2026-08-31"

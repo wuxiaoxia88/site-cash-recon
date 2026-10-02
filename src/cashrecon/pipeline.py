@@ -4,7 +4,8 @@ Jobs
   daily    yesterday + any of the previous ``self_heal_days`` days that are missing or incomplete
   retry    only incomplete days and undelivered reports in the last ``self_heal_days`` days
   weekly   last complete week (missing days are fetched first)
-  monthly  last complete month (missing days are fetched first)
+  monthly  last complete month, first edition (missing days are fetched first)
+  monthly_final  last month again around the 25th, after last month's payroll is registered
 
 Every run is recorded in ``runs`` and the log file. Any unhandled error marks the run
 failed and triggers a best-effort notice e-mail, so failures are never silent.
@@ -109,9 +110,11 @@ class Runner:
             return None
 
     def _days_job(self, fetch_days: list[date], report_days: list[date]) -> None:
-        from cashrecon.engine import reconcile
+        from cashrecon.engine import reconcile_full
         from cashrecon.ingest import fetch_days as do_fetch
         if fetch_days:
+            from cashrecon import staff
+            self._step("staff", staff.refresh, self.store, self.settings)
             results = self._step("fetch", do_fetch, self.settings, self.store, fetch_days, run_id=self.run_id) or []
             required = set(self.settings.required_sources()) | {"*"}
             self.summary["fetch_failed"] = [f"{r.day} {r.source}" for r in results
@@ -119,9 +122,16 @@ class Runner:
             self.summary["fetch_failed_optional"] = [f"{r.day} {r.source}" for r in results
                                                      if r.status == "failed" and r.source not in required]
         all_days = sorted(set(fetch_days) | set(report_days))
-        self._step("reconcile", reconcile, self.store, self.settings, all_days)
+        outcome = self._step("reconcile", reconcile_full, self.store, self.settings, all_days)
+        refreshed = outcome[1] if outcome else []
         for day in report_days:
             self._report_and_deliver("daily", day)
+        # Earlier days whose profit changed (late registrations): re-render their reports, do not re-send.
+        if refreshed:
+            from cashrecon.reports import render_report
+            self.summary["refreshed_days"] = [d.isoformat() for d in refreshed]
+            for day in refreshed:
+                self._step(f"rerender:{day}", render_report, self.store, self.settings, "daily", day)
 
     def _report_and_deliver(self, cadence: str, ref: date) -> None:
         from cashrecon.analysis import action_items, load_history
@@ -168,7 +178,7 @@ class Runner:
                 self.summary["days"] = [d.isoformat() for d in report]
                 if report:
                     self._days_job(fetch, report)
-            elif job in ("weekly", "monthly"):
+            elif job in ("weekly", "monthly", "monthly_final"):
                 start, end = dates.previous_week(today) if job == "weekly" else dates.previous_month(today)
                 missing = _incomplete_days(self.store, start, end)
                 if missing:

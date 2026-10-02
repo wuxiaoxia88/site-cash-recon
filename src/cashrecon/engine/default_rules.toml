@@ -4,7 +4,7 @@
 # op:     contains | equals | prefix | regex
 # direction: IN | OUT | *（对中天科目分项，IN=金额为正）
 # priority: 数字越小越优先
-version = 4
+version = 5
 
 # ------------------------------------------------------------ 中天科目分项
 [[rules]]
@@ -20,8 +20,9 @@ source = "ZT_SUMMARY"
 field = "path"
 op = "regex"
 pattern = "中天余额提现|线下提现"
-category = "XFER_ZT_WITHDRAW"
+category = "COST_LABOR"
 priority = 10
+note = "承包区/业务员通过预付款账户提现，属于劳务费用"
 
 [[rules]]
 source = "ZT_SUMMARY"
@@ -240,8 +241,9 @@ source = "ZT_FLOW"
 field = "src_category"
 op = "regex"
 pattern = "线下提现|中天余额提现"
-category = "XFER_ZT_WITHDRAW"
+category = "COST_LABOR"
 priority = 10
+note = "承包区/业务员提现劳务费；如某发起人实为转入本网点账户，可在配置 withdraw_initiators 中指定账户"
 
 [[rules]]
 source = "ZT_FLOW"
@@ -284,6 +286,44 @@ op = "regex"
 pattern = "余额修改"
 category = "ADJUST"
 priority = 10
+
+[[rules]]
+source = "*"
+field = "summary"
+op = "equals"
+pattern = "余额自动转入"
+direction = "OUT"
+category = "XFER_INTERNAL"
+priority = 5
+note = "支付宝余额自动转入余额宝"
+
+[[rules]]
+source = "*"
+field = "summary"
+op = "equals"
+pattern = "转出到余额"
+direction = "IN"
+category = "XFER_INTERNAL"
+priority = 5
+note = "余额宝转回支付宝余额"
+
+[[rules]]
+source = "*"
+field = "src_category"
+op = "contains"
+pattern = "面单押金"
+category = "COST_WAYBILL"
+priority = 15
+note = "实为购买单号与热敏纸"
+
+[[rules]]
+source = "*"
+field = "src_category"
+op = "contains"
+pattern = "驿站入库费"
+direction = "OUT"
+category = "COST_STATION_DISPATCH"
+priority = 25
 
 [[rules]]
 source = "*"

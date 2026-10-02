@@ -101,6 +101,18 @@ def cmd_backup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_staff(args: argparse.Namespace) -> int:
+    from cashrecon import staff
+    from cashrecon.commands import context
+    with context(args) as (settings, store):
+        count = staff.refresh(store, settings)
+        directory = staff.names(store, settings)
+    print(f"员工名册：本次更新 {count} 人，共 {len(directory)} 人")
+    for code in sorted(directory):
+        print(f"  {code}  {directory[code]}")
+    return 0
+
+
 def register(sub: argparse._SubParsersAction) -> None:
     from cashrecon.commands import add_range
     p = sub.add_parser("recon", help="重算对账与日结果")
@@ -108,20 +120,20 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=cmd_recon)
 
     p = sub.add_parser("report", help="生成日报/周报/月报（不投递）")
-    p.add_argument("cadence", choices=("daily", "weekly", "monthly"))
+    p.add_argument("cadence", choices=("daily", "weekly", "monthly", "monthly_final"))
     p.add_argument("--date", help="日报日期；周报/月报取该日期所在的周/月（默认上一个完整周期）")
     p.add_argument("--open", action="store_true", help="生成后用浏览器打开")
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("run", help="完整任务：采集→对账→报表→投递（调度器调用此命令）")
-    p.add_argument("job", choices=("daily", "retry", "weekly", "monthly"))
+    p.add_argument("job", choices=("daily", "retry", "weekly", "monthly", "monthly_final"))
     p.add_argument("--as-of", help="以该日期作为“今天”运行（补跑/演练）")
     p.add_argument("--no-deliver", action="store_true", help="只生成报表，不投递")
     p.add_argument("--dry-run", action="store_true", help="投递演练：生成邮件预览，不实际发送")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("deliver", help="投递指定报表")
-    p.add_argument("cadence", choices=("daily", "weekly", "monthly"))
+    p.add_argument("cadence", choices=("daily", "weekly", "monthly", "monthly_final"))
     p.add_argument("--date")
     p.add_argument("--channel", action="append", choices=("kb", "mail"))
     p.add_argument("--dry-run", action="store_true")
@@ -142,3 +154,6 @@ def register(sub: argparse._SubParsersAction) -> None:
 
     p = sub.add_parser("backup", help="立即备份数据库")
     p.set_defaults(func=cmd_backup)
+
+    p = sub.add_parser("staff", help="从系统更新掌中通账号→姓名（用于显示中天提现发起人）")
+    p.set_defaults(func=cmd_staff)

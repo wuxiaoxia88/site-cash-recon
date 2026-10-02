@@ -33,6 +33,7 @@ READ_ENDPOINTS: frozenset[tuple[str, str]] = frozenset({
     ("outbound-bill", "query"),
     ("outbound-rebate-bill", "day-sum"),
     ("service-violation-cost", "summary-page"),
+    ("boss-operations", "salesman-basic-info-site"),
 })
 
 
@@ -124,6 +125,10 @@ class ZtoClient:
                 return body.get("data"), route.name
             except ZtoError as exc:
                 errors.append(f"{route.name}:{exc.code}")
+                if exc.code == "endpoint_missing":
+                    # A capability gap on this route, not an outage: do not make the fallback sticky.
+                    log.info("zto %s/%s not available on %s", adapter, endpoint, route.name)
+                    continue
                 log.warning("zto %s/%s failed on %s: %s", adapter, endpoint, route.name, exc.code)
                 if route is self.routes[0] and len(self.routes) > 1:
                     self._primary_failed_at = self.clock()
