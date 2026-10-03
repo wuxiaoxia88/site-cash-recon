@@ -268,7 +268,8 @@ def test_late_payroll_refreshes_previous_month(env):
 def test_untracked_fund_and_owner_personal(paths, store):
     data = copy.deepcopy(BASE_CONFIG)
     data["site"]["owner_names"] = ["店主甲"]
-    data["sweeps"] = [{"account": "OWNER_ALIPAY", "hint_accounts": ["STAFF_ALIPAY"]}]  # no fund account
+    data["sweeps"] = [{"account": "OWNER_ALIPAY", "hint_accounts": ["STAFF_ALIPAY"],  # no fund account
+                       "fund_counterparties": ["****y"]}]
     settings = settings_from_dict(data, paths)
     ensure_default_rules(store)
     sync_accounts(store, settings)
@@ -277,7 +278,9 @@ def test_untracked_fund_and_owner_personal(paths, store):
         flow("ALIPAY", "s1", "OWNER_ALIPAY", d, "OUT", 20125, "账户间互转", "****y"),
         flow("JOURNAL", "h1", "STAFF_ALIPAY", d, "IN", 177816.84, "直链代取收入/收大客户快递费"),
         flow("ALIPAY", "p1", "OWNER_ALIPAY", d, "OUT", 4275.05, "提现至银行卡", "**甲(店主甲)"),
+        flow("ALIPAY", "c1", "OWNER_ALIPAY", d, "IN", 330, "客户直接转账", "**冬"),
         flow("ALIPAY", "u1", "OWNER_ALIPAY", d, "OUT", 330, "账户间互转", "****y"),
+        flow("ALIPAY", "u2", "OWNER_ALIPAY", d, "OUT", 50, "账户间互转", "**某"),
     ])
     store.execute("UPDATE flows SET summary='余额自动转入' WHERE flow_id='ALIPAY:s1'")
     store.execute("UPDATE flows SET summary='店主甲' WHERE flow_id='JOURNAL:h1'")
@@ -285,7 +288,9 @@ def test_untracked_fund_and_owner_personal(paths, store):
     st = states(store)
     assert st["ALIPAY:s1"] == st["JOURNAL:h1"] == ("NORMAL", "XFER_FUND")
     assert st["ALIPAY:p1"] == ("NORMAL", "OWNER_DRAW")
-    assert st["ALIPAY:u1"][0] == "REVIEW"  # unexplained transfer still needs a decision
-    assert payload["profit"]["income"] == 0 and payload["profit"]["cost"] == 0
+    assert st["ALIPAY:c1"] == ("NORMAL", "INC_PICKUP")  # the customer's payment is revenue
+    assert st["ALIPAY:u1"] == ("NORMAL", "XFER_FUND")  # swept into 余额宝 right after
+    assert st["ALIPAY:u2"][0] == "REVIEW"  # transfer to an unknown party still needs a decision
+    assert payload["profit"]["income"] == 33000 and payload["profit"]["cost"] == 0
     assert store.scalar("SELECT COUNT(*) FROM flows WHERE source='DERIVED'") == 0
     assert {a["code"] for a in payload["accounts"]} == {a.code for a in settings.accounts}

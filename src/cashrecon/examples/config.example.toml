@@ -113,6 +113,7 @@ zt_topup_counterparties = ["中通快递股份有限公司"]
 # account = "OWNER_ALIPAY"
 # owner_hints = ["店主姓名"]        # 店主把余额宝里的上月收入汇总转给出纳时，日记账摘要中出现的名字
 # hint_accounts = ["STAFF_ALIPAY"]
+# fund_counterparties = ["****y"]  # 转给本人余额宝时支付宝显示的对方（无“余额自动转入”备注时也识别）
 
 # 中天提现发起人 → 去向（掌中通账号: 账户代码 或 科目代码）
 [withdraw_initiators]

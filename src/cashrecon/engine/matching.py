@@ -352,11 +352,16 @@ class Matcher:
             account, fund = sweep["account"], sweep.get("fund") or None
             to_fund = sweep.get("to_fund_summary", "余额自动转入")
             from_fund = sweep.get("from_fund_summary", "转出到余额")
+            # Transfers to the owner's own fund identity (e.g. masked "****y") count as fund moves even
+            # without the automatic-sweep note, e.g. a customer payment that is swept right away.
+            fund_parties = set(sweep.get("fund_counterparties") or [])
+            fund_categories = set(sweep.get("to_fund_categories") or ["账户间互转"])
             fund_name = self._name(fund) if fund else sweep.get("fund_name", "余额宝")
             for f in list(result.flows.values()):
                 if not self._free(f) or f.account != account:
                     continue
-                if f.direction == "OUT" and f.summary == to_fund:
+                to_party = f.counterparty in fund_parties and f.src_category in fund_categories
+                if f.direction == "OUT" and (f.summary == to_fund or to_party):
                     self._fund_move(result, f, fund, f"转入{fund_name}", f"来自{self._name(account)}")
                 elif f.direction == "IN" and f.summary == from_fund:
                     self._fund_move(result, f, fund, f"来自{fund_name}", f"转回{self._name(account)}")
