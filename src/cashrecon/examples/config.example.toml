@@ -5,6 +5,8 @@
 [site]
 name = "示例网点"          # 报表标题显示的网点名称
 slug = "example-site"      # 知识库路径等使用的英文短名
+code = ""                  # 网点编码（用于查询业务员姓名）
+owner_names = []           # 店主姓名：转给店主本人的款项记为“店主个人收支”
 
 # ---------------------------------------------------------------- 账户
 # type: ZT_PREPAY(中天预付款) CORP_BANK(对公卡) BANK_CARD ALIPAY WECHAT CASH OTHER
@@ -105,6 +107,12 @@ withdraw_days = 3             # 中天提现到账窗口
 transfer_fee_floor_yuan = 5
 transfer_fee_ratio = 0.006
 zt_topup_counterparties = ["中通快递股份有限公司"]
+
+# 支付宝余额与余额宝自动归集（余额宝不单独统计时不要配置 fund）
+# [[sweeps]]
+# account = "OWNER_ALIPAY"
+# owner_hints = ["店主姓名"]        # 店主把余额宝里的上月收入汇总转给出纳时，日记账摘要中出现的名字
+# hint_accounts = ["STAFF_ALIPAY"]
 
 # 中天提现发起人 → 去向（掌中通账号: 账户代码 或 科目代码）
 [withdraw_initiators]

@@ -119,6 +119,7 @@ class Settings:
     analysis: dict[str, Any]
     withdraw_initiators: dict[str, dict[str, str]]
     site_code: str = ""
+    owner_names: list[str] = field(default_factory=list)
     sweeps: list[dict[str, Any]] = field(default_factory=list)
     accrual: dict[str, Any] = field(default_factory=dict)
     secrets: dict[str, str] = field(repr=False, default_factory=dict)
@@ -247,9 +248,10 @@ def settings_from_dict(data: dict[str, Any], paths: Paths, secrets: dict[str, st
     if not isinstance(sweeps, list):
         raise ConfigError("[[sweeps]] must be an array of tables")
     for i, sweep in enumerate(sweeps):
-        for key in ("account", "fund"):
-            if sweep.get(key) not in codes:
-                raise ConfigError(f"sweeps[{i}].{key} refers to an unknown account")
+        if sweep.get("account") not in codes:
+            raise ConfigError(f"sweeps[{i}].account refers to an unknown account")
+        if sweep.get("fund") and sweep["fund"] not in codes:
+            raise ConfigError(f"sweeps[{i}].fund refers to an unknown account")
     return Settings(
         paths=paths,
         site_name=str(site["name"]).strip(),
@@ -264,6 +266,7 @@ def settings_from_dict(data: dict[str, Any], paths: Paths, secrets: dict[str, st
         analysis=copy.deepcopy(data.get("analysis") or {}),
         withdraw_initiators={str(k): dict(v) for k, v in initiators.items()},
         site_code=str(site.get("code", "")).strip(),
+        owner_names=[str(x) for x in (site.get("owner_names") or []) if str(x).strip()],
         sweeps=[dict(x) for x in sweeps],
         accrual=_merged(DEFAULT_ACCRUAL, data.get("accrual")),
         secrets=dict(secrets or {}),

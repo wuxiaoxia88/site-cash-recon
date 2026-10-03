@@ -132,6 +132,12 @@ class Matcher:
         self.auto_accounts = {a.code for a in settings.accounts if a.is_auto}
         self.zt_account = settings.zt_account.code if settings.zt_account else None
 
+    def _is_owner(self, f: EFlow) -> bool:
+        names = set(self.settings.owner_names)
+        for sweep in self.settings.sweeps:
+            names.update(sweep.get("owner_hints") or [])
+        return any(n and n in f"{f.counterparty} {f.summary}" for n in names)
+
     def _name(self, code: str) -> str:
         return self.settings.account(code).name if self.settings.has_account(code) else code
 
@@ -332,41 +338,50 @@ class Matcher:
                              "biz_date": origin.day.isoformat(), "amount_cents": origin.amount, "fee_cents": 0,
                              "rule": "fund_sweep", "actor": "auto"})
 
+    def _fund_move(self, result: MatchResult, f: EFlow, fund: str | None, reason: str, reason_fund: str) -> None:
+        """Movement between an account and its fund (e.g. 余额宝). With a fund account configured a mirror
+        flow is derived on it; without one the fund is not tracked and the move is simply non-operating."""
+        if fund:
+            self._derive(result, f, fund, reason, reason_fund)
+            return
+        f.category, f.reason = "XFER_FUND", reason
+        f.link_id = _link_id("FUND", f.flow_id, None)
+
     def _sweeps(self, result: MatchResult) -> None:
         for sweep in self.settings.sweeps:
-            account, fund = sweep["account"], sweep["fund"]
+            account, fund = sweep["account"], sweep.get("fund") or None
             to_fund = sweep.get("to_fund_summary", "余额自动转入")
             from_fund = sweep.get("from_fund_summary", "转出到余额")
-            fund_name = self._name(fund)
+            fund_name = self._name(fund) if fund else sweep.get("fund_name", "余额宝")
             for f in list(result.flows.values()):
                 if not self._free(f) or f.account != account:
                     continue
                 if f.direction == "OUT" and f.summary == to_fund:
-                    self._derive(result, f, fund, f"转入{fund_name}", f"来自{self._name(account)}")
+                    self._fund_move(result, f, fund, f"转入{fund_name}", f"来自{self._name(account)}")
                 elif f.direction == "IN" and f.summary == from_fund:
-                    self._derive(result, f, fund, f"来自{fund_name}", f"转回{self._name(account)}")
+                    self._fund_move(result, f, fund, f"来自{fund_name}", f"转回{self._name(account)}")
 
     def _sweep_hints(self, result: MatchResult) -> None:
-        """Owner transfers registered on other accounts (e.g. monthly hand-over to the cashier) come
-        from the fund when no matching outgoing record exists anywhere in the system."""
+        """Owner transfers registered on other accounts (e.g. the monthly hand-over of last month's
+        Alipay income to the cashier) are internal money, not revenue."""
         for sweep in self.settings.sweeps:
-            hints = [h for h in sweep.get("owner_hints") or [] if h]
+            hints = [h for h in (sweep.get("owner_hints") or self.settings.owner_names) if h]
             accounts = set(sweep.get("hint_accounts") or [])
             minimum = to_cents(sweep.get("hint_min_yuan", 1000))
+            fund = sweep.get("fund") or None
+            fund_name = self._name(fund) if fund else sweep.get("fund_name", "余额宝")
             if not hints:
                 continue
-            fund_name = self._name(sweep["fund"])
             for f in list(result.flows.values()):
                 if not self._free(f) or f.direction != "IN" or f.amount < minimum:
                     continue
                 if accounts and f.account not in accounts:
                     continue
-                if f.account in (sweep["account"], sweep["fund"]):
+                if f.account in (sweep["account"], fund):
                     continue
-                text = f"{f.summary} {f.counterparty}"
-                if any(h in text for h in hints):
-                    self._derive(result, f, sweep["fund"], f"来自{fund_name}（店主汇总转入，非经营收入）",
-                                 f"转给{self._name(f.account)}")
+                if any(h in f"{f.summary} {f.counterparty}" for h in hints):
+                    self._fund_move(result, f, fund, f"来自店主{fund_name}（上月收入汇总转入，非经营收入）",
+                                    f"转给{self._name(f.account)}")
 
     def _internal_transfers(self, result: MatchResult) -> None:
         days = int(self.rules["transfer_days"])
@@ -409,6 +424,9 @@ class Matcher:
                     # Paying ZTO head office without a matching ZT top-up = buying waybill numbers / materials.
                     f.category, f.kind = "COST_WAYBILL", ""
                     f.reason = "付中通总部且中天账户无对应充值，按购买单号/物料计"
+            elif f.category == "XFER_INTERNAL" and self._is_owner(f):
+                f.category = "OWNER_DRAW"
+                f.reason = "店主个人收支，与网点经营无关"
             elif f.category == "XFER_INTERNAL":
                 f.state, f.kind = "REVIEW", "transfer_out_unknown" if f.direction == "OUT" else "transfer_in_unknown"
                 f.reason = ("转出到本网点其他账户，但未找到对应转入（对方账户可能未纳入系统）" if f.direction == "OUT"

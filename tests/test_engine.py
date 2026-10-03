@@ -263,3 +263,29 @@ def test_late_payroll_refreshes_previous_month(env):
     sep20 = payloads[0]["profit"]
     assert sep20["cost"] == 0 and sep20["cash"]["cost"] == 3100000
     assert sep20["deferred"][0]["period"] == "2026-08-01～2026-08-31"
+
+
+def test_untracked_fund_and_owner_personal(paths, store):
+    data = copy.deepcopy(BASE_CONFIG)
+    data["site"]["owner_names"] = ["店主甲"]
+    data["sweeps"] = [{"account": "OWNER_ALIPAY", "hint_accounts": ["STAFF_ALIPAY"]}]  # no fund account
+    settings = settings_from_dict(data, paths)
+    ensure_default_rules(store)
+    sync_accounts(store, settings)
+    d = date(2026, 9, 20)
+    add(store, d, [
+        flow("ALIPAY", "s1", "OWNER_ALIPAY", d, "OUT", 20125, "账户间互转", "****y"),
+        flow("JOURNAL", "h1", "STAFF_ALIPAY", d, "IN", 177816.84, "直链代取收入/收大客户快递费"),
+        flow("ALIPAY", "p1", "OWNER_ALIPAY", d, "OUT", 4275.05, "提现至银行卡", "**甲(店主甲)"),
+        flow("ALIPAY", "u1", "OWNER_ALIPAY", d, "OUT", 330, "账户间互转", "****y"),
+    ])
+    store.execute("UPDATE flows SET summary='余额自动转入' WHERE flow_id='ALIPAY:s1'")
+    store.execute("UPDATE flows SET summary='店主甲' WHERE flow_id='JOURNAL:h1'")
+    payload = reconcile(store, settings, [d], today=date(2026, 9, 25))[0]
+    st = states(store)
+    assert st["ALIPAY:s1"] == st["JOURNAL:h1"] == ("NORMAL", "XFER_FUND")
+    assert st["ALIPAY:p1"] == ("NORMAL", "OWNER_DRAW")
+    assert st["ALIPAY:u1"][0] == "REVIEW"  # unexplained transfer still needs a decision
+    assert payload["profit"]["income"] == 0 and payload["profit"]["cost"] == 0
+    assert store.scalar("SELECT COUNT(*) FROM flows WHERE source='DERIVED'") == 0
+    assert {a["code"] for a in payload["accounts"]} == {a.code for a in settings.accounts}
